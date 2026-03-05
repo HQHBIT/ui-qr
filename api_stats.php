@@ -3,6 +3,7 @@ require 'config.php';
 require_auth();
 
 header('Content-Type: application/json');
+header('X-Robots-Tag: noindex, nofollow');
 
 $uuid = $_GET['uuid'] ?? '';
 if (!$uuid) { echo json_encode([]); exit; }

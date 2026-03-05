@@ -2,32 +2,80 @@
 declare(strict_types=1);
 
 // --- AUTHENTICATION SETTINGS ---
-define('ADMIN_USER', 'admin'); 
-define('ADMIN_PASS', 'password'); 
+define('ADMIN_USER', 'admin');
+define('ADMIN_PASS', 'change_me');
 
 // --- API SETTINGS ---
-// KEY used for the JSON API (X-Api-Key header)
+// Generate a secure random key using the generator on the API Docs page, or run:
+// php -r "echo bin2hex(random_bytes(32));"
 define('API_KEY', 'change_me_to_a_random_string');
 
-// Site Settings
-define('BASE_URL', 'https://yourdomain.com'); 
-define('DB_PATH', '/home/user/db/tuxxin_qr.sqlite');
-define('TIMEZONE', 'America/New_York');
+// --- SITE SETTINGS ---
+// No trailing slash. Examples:
+//   Root install:      'https://yourdomain.com'
+//   Subdir install:    'https://yourdomain.com/qr-track'
+define('BASE_URL',   'https://yourdomain.com');
+
+// Absolute paths — place OUTSIDE your web root for security
+define('DB_PATH',    '/home/youruser/db/tuxxin_qr.sqlite');
+define('LOGO_DIR',   '/home/youruser/tmp');
+
+define('TIMEZONE',   'America/New_York');
 define('THEME_PATH', __DIR__ . '/themes');
-define('LOGO_DIR', '/home/user/tmp');
 
-// Network Settings (Enable when webservers behind tunnel like CloudFlare Zero Trust)
-define('USE_CLOUDFLARE_TUNNEL', true);
+// --- NETWORK SETTINGS ---
+// Set true if your server is behind a Cloudflare Tunnel or similar reverse proxy
+define('USE_CLOUDFLARE_TUNNEL', false);
 
-// END OF CONFIGURATION
+// --- DISABLED QR CODE PAGE ---
+// Where to redirect when a QR code is inactive.
+// Set to a full URL (e.g. 'https://yourdomain.com') or leave '' to show the built-in "Link Inactive" page.
+define('DISABLED_REDIRECT_URL', '');
 
+// --- API RATE THROTTLING ---
+// Limits requests per IP to prevent abuse. Set API_THROTTLE_ENABLED to false to disable.
+define('API_THROTTLE_ENABLED', true);
+define('API_THROTTLE_LIMIT',  60);   // Max requests per window per IP
+define('API_THROTTLE_WINDOW', 60);   // Window size in seconds
 
-// --- HELPER FUNCTIONS ---
+// --- SESSION SETTINGS ---
+// Seconds of inactivity before the admin session expires (default: 2 hours)
+define('SESSION_LIFETIME', 7200);
+
+// =============================================================================
+// END OF CONFIGURATION — do not edit below this line
+// =============================================================================
+
 function require_auth() {
     if (session_status() === PHP_SESSION_NONE) session_start();
-    if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
-        header("Location: /login.php");
+
+    if (isset($_SESSION['last_active']) && (time() - $_SESSION['last_active']) > SESSION_LIFETIME) {
+        session_unset();
+        session_destroy();
+        header("Location: " . BASE_URL . "/login.php");
         exit;
+    }
+    $_SESSION['last_active'] = time();
+
+    if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+        header("Location: " . BASE_URL . "/login.php");
+        exit;
+    }
+}
+
+function csrf_token(): string {
+    if (session_status() === PHP_SESSION_NONE) session_start();
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+function verify_csrf(): void {
+    $token = $_POST['csrf_token'] ?? '';
+    if (!hash_equals(csrf_token(), $token)) {
+        http_response_code(403);
+        die('Invalid request (CSRF check failed).');
     }
 }
 
@@ -36,38 +84,41 @@ function purge_old_tokens($db) {
 }
 
 // --- DATABASE CONNECTION ---
-$dbDir = dirname(DB_PATH);
+$dbDir  = dirname(DB_PATH);
 $dbFile = DB_PATH;
 
 if ((!is_dir($dbDir) || !is_writable($dbDir)) || (file_exists($dbFile) && !is_writable($dbFile))) {
-    exit("Database Permission Error: PHP cannot write to $dbDir");
+    exit("Database Permission Error: PHP cannot write to $dbDir. Check that the directory exists and is writable by the web server.");
 }
 
 try {
     $db = new PDO('sqlite:' . DB_PATH);
-    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $db->setAttribute(PDO::ATTR_ERRMODE,            PDO::ERRMODE_EXCEPTION);
     $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-    // Products Table
     $db->exec("CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         uuid TEXT UNIQUE,
         title TEXT,
-        type TEXT, target_data TEXT, logo_path TEXT DEFAULT NULL,
-        is_active INTEGER DEFAULT 1, is_deleted INTEGER DEFAULT 0,
+        type TEXT,
+        target_data TEXT,
+        logo_path TEXT DEFAULT NULL,
+        is_active INTEGER DEFAULT 1,
+        is_deleted INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )");
 
-    // Scans Table
     $db->exec("CREATE TABLE IF NOT EXISTS scans (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        product_uuid TEXT, ip_address TEXT, user_agent TEXT,
-        scan_status TEXT DEFAULT 'success', scanned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        product_uuid TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        scan_status TEXT DEFAULT 'success',
+        scanned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(product_uuid) REFERENCES products(uuid)
     )");
 
-    // --- MIGRATION: ADD GEO COLUMNS IF MISSING ---
-    // This allows us to cache the API results so we don't spam the IP-API service
+    // Migration: add geo columns if missing
     $columns = $db->query("PRAGMA table_info(scans)")->fetchAll(PDO::FETCH_COLUMN, 1);
     if (!in_array('geo_city', $columns)) {
         $db->exec("ALTER TABLE scans ADD COLUMN geo_city TEXT");
@@ -75,8 +126,7 @@ try {
         $db->exec("ALTER TABLE scans ADD COLUMN geo_country TEXT");
         $db->exec("ALTER TABLE scans ADD COLUMN geo_isp TEXT");
     }
-    
-    // API Tokens Table
+
     $db->exec("CREATE TABLE IF NOT EXISTS api_tokens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         token TEXT UNIQUE,
@@ -85,4 +135,12 @@ try {
     )");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_api_token ON api_tokens(token)");
 
-} catch (PDOException $e) { die("Database Error: " . $e->getMessage()); }
+    $db->exec("CREATE TABLE IF NOT EXISTS rate_limit (
+        ip TEXT PRIMARY KEY,
+        window_start INTEGER NOT NULL,
+        request_count INTEGER NOT NULL DEFAULT 1
+    )");
+
+} catch (PDOException $e) {
+    die("Database Error: " . $e->getMessage());
+}

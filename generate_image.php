@@ -11,9 +11,9 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 $isLoggedIn = isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true;
 
 // 2. Get Input
-$uuid = $_GET['id'] ?? '';
-$token = $_GET['token'] ?? '';
-$format = $_GET['format'] ?? 'png';
+$uuid   = $_GET['id'] ?? '';
+$token  = $_GET['token'] ?? '';
+$format = in_array($_GET['format'] ?? '', ['png', 'jpg'], true) ? $_GET['format'] : 'png';
 
 if (!$uuid) { http_response_code(400); die('No ID'); }
 

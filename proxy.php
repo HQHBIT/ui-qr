@@ -1,6 +1,8 @@
 <?php
 require 'config.php';
 
+header('X-Robots-Tag: noindex, nofollow');
+
 $uuid = $_GET['id'] ?? null;
 if (!$uuid) { http_response_code(404); die("QR Code not found."); }
 

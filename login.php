@@ -1,6 +1,21 @@
 <?php
 require 'config.php';
+
+// Harden session cookie before starting
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path'     => '/',
+    'secure'   => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
+    'httponly' => true,
+    'samesite' => 'Strict',
+]);
 session_start();
+
+// Already logged in? Go to dashboard
+if (isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true) {
+    header("Location: " . BASE_URL);
+    exit;
+}
 
 $error = '';
 
@@ -9,24 +24,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $pass = $_POST['password'] ?? '';
 
     if ($user === ADMIN_USER && $pass === ADMIN_PASS) {
-        $_SESSION['logged_in'] = true;
         session_regenerate_id(true);
-        
-        // --- CLEANUP TRIGGER ---
+        $_SESSION['logged_in']   = true;
+        $_SESSION['last_active'] = time();
+
         purge_old_tokens($db);
-        
+
         header("Location: " . BASE_URL);
         exit;
     } else {
-        $error = "Invalid credentials.";
+        $error = 'Invalid credentials.';
     }
 }
 ?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
     <title>Login | Tuxxin QR Track</title>
+    <link rel="icon" type="image/png" href="<?= htmlspecialchars(BASE_URL) ?>/tuxxin-qr-track.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Recursive:wght@300..900&display=swap" rel="stylesheet">
     <style>
@@ -43,12 +61,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 <body>
     <div class="login-card">
-        <img src="logo-v2.png" alt="Logo" class="logo">
+        <img src="<?= htmlspecialchars(BASE_URL) ?>/logo-v2.png" alt="Tuxxin QR Track Logo" class="logo">
         <h2>Admin Login</h2>
-        <?php if($error): ?><div class="error"><?= $error ?></div><?php endif; ?>
+        <?php if ($error): ?>
+            <div class="error"><?= htmlspecialchars($error) ?></div>
+        <?php endif; ?>
         <form method="POST">
-            <input type="text" name="username" placeholder="Username" required autofocus>
-            <input type="password" name="password" placeholder="Password" required>
+            <input type="text" name="username" placeholder="Username" required autofocus autocomplete="username">
+            <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
             <button type="submit">Sign In</button>
         </form>
     </div>
