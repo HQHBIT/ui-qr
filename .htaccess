@@ -1,0 +1,8 @@
+RewriteEngine On
+
+# 1. If the file exists physically (images, css, js), serve it directly
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# 2. Otherwise, send all requests to index.php for framework routing
+RewriteRule ^(.*)$ index.php [QSA,L]
