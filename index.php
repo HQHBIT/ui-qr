@@ -41,6 +41,57 @@ function ensure_owner_or_admin($db, int $id, ?array $me): array {
     return $row;
 }
 
+function fetch_folder_or_die($db, int $id, int $userId, bool $allowAdmin): array {
+    $stmt = $db->prepare("SELECT * FROM folders WHERE id = ?");
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    if (!$row) { http_response_code(404); die('Folder not found.'); }
+    if (!$allowAdmin && (int)$row['user_id'] !== $userId) {
+        http_response_code(403); die('Forbidden.');
+    }
+    return $row;
+}
+
+function build_folder_path($db, ?int $folderId, int $userId): array {
+    $path = [];
+    $cur = $folderId;
+    $guard = 0;
+    while ($cur !== null && $guard++ < 32) {
+        $st = $db->prepare("SELECT id, name, parent_id FROM folders WHERE id = ? AND user_id = ?");
+        $st->execute([$cur, $userId]);
+        $row = $st->fetch();
+        if (!$row) break;
+        array_unshift($path, $row);
+        $cur = $row['parent_id'] !== null ? (int)$row['parent_id'] : null;
+    }
+    return $path;
+}
+
+function valid_folder_id_for_user($db, $folderId, int $userId): ?int {
+    if ($folderId === null || $folderId === '' || $folderId === '0') return null;
+    $folderId = (int)$folderId;
+    $st = $db->prepare("SELECT id FROM folders WHERE id = ? AND user_id = ?");
+    $st->execute([$folderId, $userId]);
+    return $st->fetch() ? $folderId : null;
+}
+
+function descendant_folder_ids($db, int $rootId, int $userId): array {
+    $ids = [$rootId];
+    $queue = [$rootId];
+    while ($queue) {
+        $next = [];
+        $placeholders = implode(',', array_fill(0, count($queue), '?'));
+        $st = $db->prepare("SELECT id FROM folders WHERE user_id = ? AND parent_id IN ($placeholders)");
+        $st->execute(array_merge([$userId], $queue));
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN, 0) as $cid) {
+            $ids[] = (int)$cid;
+            $next[] = (int)$cid;
+        }
+        $queue = $next;
+    }
+    return $ids;
+}
+
 // --- HANDLE FORM SUBMISSIONS & ACTIONS ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
@@ -112,11 +163,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         $design = sanitize_design($_POST['design'] ?? []);
         $designJson = json_encode($design);
+        $folderId = valid_folder_id_for_user($db, $_POST['folder_id'] ?? null, $me['id']);
 
-        $stmt = $db->prepare("INSERT INTO products (uuid, title, type, target_data, logo_path, user_id, design_json) VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->execute([$uuid, $title, $type, $target, $logoPath, $me['id'], $designJson]);
+        $stmt = $db->prepare("INSERT INTO products (uuid, title, type, target_data, logo_path, user_id, design_json, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->execute([$uuid, $title, $type, $target, $logoPath, $me['id'], $designJson, $folderId]);
 
-        header("Location: " . BASE_URL);
+        $redir = BASE_URL;
+        if ($folderId !== null) $redir .= '?folder=' . $folderId;
+        header("Location: " . $redir);
         exit;
     }
 
@@ -165,11 +219,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         $design = sanitize_design($_POST['design'] ?? json_decode($current['design_json'] ?? '[]', true) ?: []);
         $designJson = json_encode($design);
+        $ownerId = (int)$current['user_id'];
+        $folderId = isset($_POST['folder_id'])
+            ? valid_folder_id_for_user($db, $_POST['folder_id'], $ownerId)
+            : ($current['folder_id'] !== null ? (int)$current['folder_id'] : null);
 
-        $stmt = $db->prepare("UPDATE products SET title = ?, target_data = ?, design_json = ? WHERE id = ? AND is_deleted = 0");
-        $stmt->execute([$title, $target, $designJson, $id]);
+        $stmt = $db->prepare("UPDATE products SET title = ?, target_data = ?, design_json = ?, folder_id = ? WHERE id = ? AND is_deleted = 0");
+        $stmt->execute([$title, $target, $designJson, $folderId, $id]);
 
-        header("Location: " . BASE_URL);
+        $redir = BASE_URL;
+        if ($folderId !== null) $redir .= '?folder=' . $folderId;
+        header("Location: " . $redir);
         exit;
     }
 
@@ -198,6 +258,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // Action: Add Folder
+    if ($_POST['action'] === 'folder_add') {
+        $name = trim($_POST['name'] ?? '');
+        $parentId = $_POST['parent_id'] ?? null;
+        $parentId = ($parentId === '' || $parentId === '0' || $parentId === null) ? null : (int)$parentId;
+        if ($name === '' || mb_strlen($name) > 100) { http_response_code(400); die('Invalid folder name.'); }
+        if ($parentId !== null) fetch_folder_or_die($db, $parentId, $me['id'], false);
+        $db->prepare("INSERT INTO folders (user_id, parent_id, name) VALUES (?, ?, ?)")
+           ->execute([$me['id'], $parentId, $name]);
+        $newId = (int)$db->lastInsertId();
+        header('Content-Type: application/json');
+        echo json_encode(['status' => 'ok', 'id' => $newId, 'name' => $name, 'parent_id' => $parentId]);
+        exit;
+    }
+
+    // Action: Rename Folder
+    if ($_POST['action'] === 'folder_rename') {
+        $id = (int)($_POST['id'] ?? 0);
+        $name = trim($_POST['name'] ?? '');
+        if ($id <= 0 || $name === '' || mb_strlen($name) > 100) { http_response_code(400); die('Invalid input.'); }
+        fetch_folder_or_die($db, $id, $me['id'], false);
+        $db->prepare("UPDATE folders SET name = ? WHERE id = ? AND user_id = ?")->execute([$name, $id, $me['id']]);
+        header('Content-Type: application/json');
+        echo json_encode(['status' => 'ok']);
+        exit;
+    }
+
+    // Action: Delete Folder (move children + QRs to parent)
+    if ($_POST['action'] === 'folder_delete') {
+        $id = (int)($_POST['id'] ?? 0);
+        $folder = fetch_folder_or_die($db, $id, $me['id'], false);
+        $parent = $folder['parent_id'] !== null ? (int)$folder['parent_id'] : null;
+        $db->prepare("UPDATE folders  SET parent_id = ? WHERE parent_id = ? AND user_id = ?")
+           ->execute([$parent, $id, $me['id']]);
+        $db->prepare("UPDATE products SET folder_id = ? WHERE folder_id = ? AND user_id = ?")
+           ->execute([$parent, $id, $me['id']]);
+        $db->prepare("DELETE FROM folders WHERE id = ? AND user_id = ?")->execute([$id, $me['id']]);
+        header('Content-Type: application/json');
+        echo json_encode(['status' => 'ok', 'parent_id' => $parent]);
+        exit;
+    }
+
+    // Action: Move QR to folder
+    if ($_POST['action'] === 'move') {
+        $id = (int)($_POST['id'] ?? 0);
+        ensure_owner_or_admin($db, $id, $me);
+        $row = $db->query("SELECT user_id FROM products WHERE id = " . (int)$id)->fetch();
+        $ownerId = (int)$row['user_id'];
+        $targetFolder = valid_folder_id_for_user($db, $_POST['folder_id'] ?? null, $ownerId);
+        $db->prepare("UPDATE products SET folder_id = ? WHERE id = ?")->execute([$targetFolder, $id]);
+        header('Content-Type: application/json');
+        echo json_encode(['status' => 'ok']);
+        exit;
+    }
+
     // Action: Update Design (live designer save)
     if ($_POST['action'] === 'design') {
         $id = (int)($_POST['id'] ?? 0);
@@ -212,30 +327,88 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 // --- FETCH DATA ---
-$showTrash = isset($_GET['trash']);
-$deletedFlag = $showTrash ? 1 : 0;
+$showTrash    = isset($_GET['trash']);
+$deletedFlag  = $showTrash ? 1 : 0;
+$currentFolderId = isset($_GET['folder']) && $_GET['folder'] !== ''
+    ? valid_folder_id_for_user($db, $_GET['folder'], $me['id'])
+    : null;
+
+$folderPath = $currentFolderId !== null ? build_folder_path($db, $currentFolderId, $me['id']) : [];
+
+// Build folder filter clause (user's QRs only — admin global view = ignore folder filter when no folder selected)
+$folderClause = '';
+$folderParams = [];
+if (!$showTrash && $currentFolderId !== null) {
+    $folderClause = " AND p.folder_id = ? AND p.user_id = ?";
+    $folderParams = [$currentFolderId, $me['id']];
+}
 
 if ($isAdmin) {
-    $stmt = $db->prepare("
-        SELECT p.*, u.username AS owner_username,
+    $sql = "
+        SELECT p.*, u.username AS owner_username, f.name AS folder_name,
             (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count
         FROM products p
         LEFT JOIN users u ON u.id = p.user_id
-        WHERE p.is_deleted = ?
+        LEFT JOIN folders f ON f.id = p.folder_id
+        WHERE p.is_deleted = ?" . $folderClause . "
         ORDER BY p.created_at DESC
-    ");
-    $stmt->execute([$deletedFlag]);
+    ";
+    $stmt = $db->prepare($sql);
+    $stmt->execute(array_merge([$deletedFlag], $folderParams));
 } else {
-    $stmt = $db->prepare("
-        SELECT p.*, NULL AS owner_username,
-            (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count
-        FROM products p
-        WHERE p.is_deleted = ? AND p.user_id = ?
-        ORDER BY p.created_at DESC
-    ");
-    $stmt->execute([$deletedFlag, $me['id']]);
+    if ($currentFolderId !== null) {
+        $stmt = $db->prepare("
+            SELECT p.*, NULL AS owner_username, f.name AS folder_name,
+                (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count
+            FROM products p
+            LEFT JOIN folders f ON f.id = p.folder_id
+            WHERE p.is_deleted = ? AND p.user_id = ? AND p.folder_id = ?
+            ORDER BY p.created_at DESC
+        ");
+        $stmt->execute([$deletedFlag, $me['id'], $currentFolderId]);
+    } else {
+        // Root view (non-admin): show only QRs with no folder
+        $stmt = $db->prepare("
+            SELECT p.*, NULL AS owner_username, f.name AS folder_name,
+                (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count
+            FROM products p
+            LEFT JOIN folders f ON f.id = p.folder_id
+            WHERE p.is_deleted = ? AND p.user_id = ? AND p.folder_id IS NULL
+            ORDER BY p.created_at DESC
+        ");
+        $stmt->execute([$deletedFlag, $me['id']]);
+    }
 }
 $products = $stmt->fetchAll();
+
+// Subfolders of current location (current user only)
+$subStmt = $db->prepare("
+    SELECT f.*, (SELECT COUNT(*) FROM products WHERE folder_id = f.id AND is_deleted = 0) AS qr_count,
+           (SELECT COUNT(*) FROM folders WHERE parent_id = f.id) AS sub_count
+    FROM folders f
+    WHERE f.user_id = ? AND " . ($currentFolderId === null ? 'f.parent_id IS NULL' : 'f.parent_id = ?') . "
+    ORDER BY f.name COLLATE NOCASE ASC
+");
+$subStmt->execute($currentFolderId === null ? [$me['id']] : [$me['id'], $currentFolderId]);
+$subfolders = $subStmt->fetchAll();
+
+// All folders (flat) for the move/select dropdowns
+$allFolders = $db->prepare("SELECT id, parent_id, name FROM folders WHERE user_id = ? ORDER BY name COLLATE NOCASE ASC");
+$allFolders->execute([$me['id']]);
+$allFolders = $allFolders->fetchAll();
+
+function build_folder_options(array $all, ?int $selected = null, ?int $parent = null, int $depth = 0): string {
+    $html = '';
+    foreach ($all as $f) {
+        $fParent = $f['parent_id'] !== null ? (int)$f['parent_id'] : null;
+        if ($fParent !== $parent) continue;
+        $sel = ($selected !== null && (int)$f['id'] === $selected) ? ' selected' : '';
+        $html .= '<option value="' . (int)$f['id'] . '"' . $sel . '>'
+              . str_repeat('— ', $depth) . htmlspecialchars($f['name']) . '</option>';
+        $html .= build_folder_options($all, $selected, (int)$f['id'], $depth + 1);
+    }
+    return $html;
+}
 
 $csrfToken = csrf_token();
 
@@ -250,9 +423,39 @@ include THEME_PATH . '/header.php';
     <h2 style="margin:0; color:#dc3545;">Trash</h2>
 </div>
 <?php else: ?>
-<div style="margin-bottom:15px; display:flex; justify-content:flex-end;">
-    <a href="?trash" class="btn btn-sm" style="background:#6c757d;" title="View deleted QR codes">&#128465; Trash</a>
+<div class="folder-bar">
+    <div class="folder-breadcrumb">
+        <a href="<?= htmlspecialchars(BASE_URL) ?>"><?= empty($folderPath) ? '<strong>Home</strong>' : 'Home' ?></a>
+        <?php foreach ($folderPath as $i => $f): ?>
+            <span class="crumb-sep">/</span>
+            <?php if ($i === count($folderPath) - 1): ?>
+                <strong><?= htmlspecialchars($f['name']) ?></strong>
+            <?php else: ?>
+                <a href="?folder=<?= (int)$f['id'] ?>"><?= htmlspecialchars($f['name']) ?></a>
+            <?php endif; ?>
+        <?php endforeach; ?>
+    </div>
+    <div style="display:flex; gap:8px;">
+        <button class="btn btn-sm" style="background:#6c757d;" onclick="openFolderAdd(<?= $currentFolderId !== null ? (int)$currentFolderId : 'null' ?>)">+ Folder</button>
+        <?php if ($currentFolderId !== null): ?>
+            <button class="btn btn-sm btn-info" onclick="openFolderRename(<?= (int)end($folderPath)['id'] ?>, <?= htmlspecialchars(json_encode(end($folderPath)['name']), ENT_QUOTES) ?>)">Rename</button>
+            <button class="btn btn-sm btn-danger" onclick="confirmFolderDelete(<?= (int)end($folderPath)['id'] ?>)">Delete</button>
+        <?php endif; ?>
+        <a href="?trash" class="btn btn-sm" style="background:#6c757d;" title="View deleted QR codes">&#128465; Trash</a>
+    </div>
 </div>
+
+<?php if (!empty($subfolders)): ?>
+<div class="folder-grid">
+    <?php foreach ($subfolders as $f): ?>
+        <a class="folder-card" href="?folder=<?= (int)$f['id'] ?>">
+            <div class="folder-icon">📁</div>
+            <div class="folder-name"><?= htmlspecialchars($f['name']) ?></div>
+            <div class="folder-meta"><?= (int)$f['qr_count'] ?> QR<?= (int)$f['sub_count'] ? ' · ' . (int)$f['sub_count'] . ' sub' : '' ?></div>
+        </a>
+    <?php endforeach; ?>
+</div>
+<?php endif; ?>
 <?php endif; ?>
 
 <div class="qr-list">
@@ -297,6 +500,7 @@ include THEME_PATH . '/header.php';
                     'title'       => $p['title'],
                     'type'        => $p['type'],
                     'target_data' => $p['target_data'],
+                    'folder_id'   => $p['folder_id'] !== null ? (int)$p['folder_id'] : '',
                 ]), ENT_QUOTES) ?>)' title="Edit">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                         <path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/>
@@ -363,6 +567,12 @@ include THEME_PATH . '/header.php';
                 <textarea name="email_body" placeholder="Body" maxlength="2000"></textarea>
             </div>
 
+            <label>Folder</label>
+            <select name="folder_id">
+                <option value="">— No folder (Home) —</option>
+                <?= build_folder_options($allFolders, $currentFolderId) ?>
+            </select>
+
             <label>Embedded Logo (Optional — PNG or JPG only)</label>
             <input type="file" name="logo" accept="image/png, image/jpeg">
 
@@ -414,6 +624,12 @@ include THEME_PATH . '/header.php';
             <input type="hidden" name="id" id="editId">
             <label>Title</label>
             <input type="text" name="title" id="editTitle" required maxlength="255">
+
+            <label>Folder</label>
+            <select name="folder_id" id="editFolderId">
+                <option value="">— No folder (Home) —</option>
+                <?= build_folder_options($allFolders) ?>
+            </select>
 
             <!-- General (url, phone, map, social) -->
             <div id="edit-field-general" class="type-fields" style="display:none;">
@@ -560,6 +776,42 @@ include THEME_PATH . '/header.php';
     </div>
 </div>
 
+<!-- ── Folder Add Modal ───────────────────────────────────────────────────────── -->
+<div id="folderAddModal" class="modal">
+    <div class="modal-content" style="max-width:420px;">
+        <svg class="close-icon" onclick="closeModal('folderAddModal')" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        <h2>New Folder</h2>
+        <p id="folderAddParentLabel" style="color:var(--muted); margin:0 0 10px;"></p>
+        <input type="text" id="folderAddName" placeholder="Folder name" maxlength="100">
+        <button class="btn" style="width:100%;" onclick="submitFolderAdd()">Create</button>
+        <div id="folderAddMsg" style="color:#dc3545; margin-top:8px; min-height:1em; font-size:0.85em;"></div>
+    </div>
+</div>
+
+<!-- ── Folder Rename Modal ────────────────────────────────────────────────────── -->
+<div id="folderRenameModal" class="modal">
+    <div class="modal-content" style="max-width:420px;">
+        <svg class="close-icon" onclick="closeModal('folderRenameModal')" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        <h2>Rename Folder</h2>
+        <input type="hidden" id="folderRenameId">
+        <input type="text" id="folderRenameName" maxlength="100">
+        <button class="btn" style="width:100%;" onclick="submitFolderRename()">Save</button>
+    </div>
+</div>
+
+<!-- ── Folder Delete Confirm Modal ────────────────────────────────────────────── -->
+<div id="folderDeleteModal" class="modal">
+    <div class="modal-content" style="text-align:center; max-width:420px;">
+        <svg class="close-icon" onclick="closeModal('folderDeleteModal')" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        <h2>Delete this folder?</h2>
+        <p>QR codes and subfolders inside will be moved up to the parent.</p>
+        <div style="display:flex; gap:10px; justify-content:center; margin-top:20px;">
+            <button class="btn btn-danger" onclick="submitFolderDelete()">Yes, delete</button>
+            <button class="btn" style="background:#6c757d;" onclick="closeModal('folderDeleteModal')">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <!-- ── Delete Confirm Modal ───────────────────────────────────────────────────── -->
 <div id="deleteModal" class="modal">
     <div class="modal-content" style="text-align: center;">
@@ -616,6 +868,7 @@ function openEditModal(data) {
 
     document.getElementById('editId').value    = data.id;
     document.getElementById('editTitle').value = data.title;
+    document.getElementById('editFolderId').value = data.folder_id === null || data.folder_id === undefined ? '' : data.folder_id;
     document.getElementById('editTypeLabel').textContent = '[' + data.type.toUpperCase() + ']';
 
     const type = data.type;
@@ -1075,6 +1328,72 @@ document.getElementById('confirmDeleteBtn').addEventListener('click', function()
     fd.append('csrf_token', CSRF_TOKEN);
     fetch('index.php', { method: 'POST', body: fd }).then(() => location.reload());
 });
+
+// ── Folders ──────────────────────────────────────────────────────────────────
+let folderAddParent = null;
+function openFolderAdd(parentId) {
+    folderAddParent = parentId;
+    document.getElementById('folderAddName').value = '';
+    document.getElementById('folderAddMsg').textContent = '';
+    document.getElementById('folderAddParentLabel').textContent =
+        parentId === null ? 'Will be created at Home.' : 'Will be created under the current folder.';
+    openModal('folderAddModal');
+    setTimeout(() => document.getElementById('folderAddName').focus(), 50);
+}
+function submitFolderAdd() {
+    const name = document.getElementById('folderAddName').value.trim();
+    if (!name) { document.getElementById('folderAddMsg').textContent = 'Name required.'; return; }
+    const fd = new FormData();
+    fd.append('action', 'folder_add');
+    fd.append('csrf_token', CSRF_TOKEN);
+    fd.append('name', name);
+    if (folderAddParent !== null) fd.append('parent_id', folderAddParent);
+    fetch('index.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(j => {
+            if (j.status === 'ok') {
+                const target = j.parent_id !== null ? '?folder=' + j.parent_id : '';
+                window.location = (location.search.includes('folder=') ? location.pathname + location.search : location.pathname + target);
+                location.reload();
+            }
+        });
+}
+
+let folderRenameId = null;
+function openFolderRename(id, name) {
+    folderRenameId = id;
+    document.getElementById('folderRenameId').value = id;
+    document.getElementById('folderRenameName').value = name;
+    openModal('folderRenameModal');
+    setTimeout(() => document.getElementById('folderRenameName').select(), 50);
+}
+function submitFolderRename() {
+    const name = document.getElementById('folderRenameName').value.trim();
+    if (!name) return;
+    const fd = new FormData();
+    fd.append('action', 'folder_rename');
+    fd.append('csrf_token', CSRF_TOKEN);
+    fd.append('id', folderRenameId);
+    fd.append('name', name);
+    fetch('index.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(() => location.reload());
+}
+
+let folderDeleteId = null;
+function confirmFolderDelete(id) { folderDeleteId = id; openModal('folderDeleteModal'); }
+function submitFolderDelete() {
+    const fd = new FormData();
+    fd.append('action', 'folder_delete');
+    fd.append('csrf_token', CSRF_TOKEN);
+    fd.append('id', folderDeleteId);
+    fetch('index.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(j => {
+            const dest = j.parent_id !== null && j.parent_id !== undefined ? '?folder=' + j.parent_id : '';
+            window.location = location.pathname + dest;
+        });
+}
 </script>
 
 <?php include THEME_PATH . '/footer.php'; ?>

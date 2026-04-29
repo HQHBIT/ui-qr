@@ -83,6 +83,19 @@
         .swatch-hex { font-family: monospace; font-size: 0.78rem; color: var(--muted); }
         @media (max-width: 720px) { .designer-grid { grid-template-columns: 1fr; } }
 
+        /* Folders */
+        .folder-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+        .folder-breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 0.95rem; flex-wrap: wrap; }
+        .folder-breadcrumb a { color: var(--accent); text-decoration: none; }
+        .folder-breadcrumb a:hover { text-decoration: underline; }
+        .crumb-sep { color: var(--muted); }
+        .folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 18px; }
+        .folder-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 12px; text-decoration: none; color: var(--text); display: flex; flex-direction: column; align-items: center; gap: 4px; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+        .folder-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 2px 8px rgba(30,144,255,0.12); }
+        .folder-icon { font-size: 1.8rem; line-height: 1; }
+        .folder-name { font-weight: 600; font-size: 0.95rem; text-align: center; word-break: break-word; }
+        .folder-meta { font-size: 0.75rem; color: var(--muted); }
+
         /* Toggle Switch */
         .switch { position: relative; display: inline-block; width: 40px; height: 20px; margin: 0 15px; }
         .switch input { opacity: 0; width: 0; height: 0; }

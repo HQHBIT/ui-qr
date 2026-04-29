@@ -128,6 +128,15 @@ try {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )");
 
+    $db->exec("CREATE TABLE IF NOT EXISTS folders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        parent_id INTEGER DEFAULT NULL,
+        name TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_folders_user_parent ON folders(user_id, parent_id)");
+
     $db->exec("CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         uuid TEXT UNIQUE,
@@ -149,6 +158,10 @@ try {
     }
     if (!in_array('design_json', $pcols)) {
         $db->exec("ALTER TABLE products ADD COLUMN design_json TEXT DEFAULT NULL");
+    }
+    if (!in_array('folder_id', $pcols)) {
+        $db->exec("ALTER TABLE products ADD COLUMN folder_id INTEGER DEFAULT NULL");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_products_folder ON products(folder_id)");
     }
 
     // Bootstrap: seed admin from config constants on first run; assign legacy QRs to admin
