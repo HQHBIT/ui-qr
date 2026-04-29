@@ -16,41 +16,43 @@ $csrfToken     = csrf_token();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
-    <title>API Docs & Console | Tuxxin QR Track</title>
+    <title>API Docs & Console | Umoor Iqtesadiyah QR Track</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Recursive:wght@300..900&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: #121212; --card: #1e1e1e; --text: #e0e0e0; --accent: #ff6600; --border: #333; --code-bg: #151515; --danger: #ff4444; }
+        :root { --bg: #f5f7fa; --card: #ffffff; --text: #1a1a1a; --accent: #1e90ff; --border: #dde2e8; --code-bg: #f0f3f7; --danger: #dc3545; --muted: #6c757d; }
         body { font-family: 'Recursive', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; line-height: 1.6; }
         .container { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 30px; }
 
         header { grid-column: 1 / -1; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
         h1 { color: var(--accent); margin: 0; }
-        h2 { border-left: 4px solid var(--accent); padding-left: 10px; margin-top: 30px; color: #fff; }
+        h2 { border-left: 4px solid var(--accent); padding-left: 10px; margin-top: 30px; color: var(--text); }
 
-        .doc-section     { background: var(--card); padding: 25px; border-radius: 8px; border: 1px solid var(--border); }
-        .console-section { background: #181818; padding: 25px; border-radius: 8px; border: 1px solid var(--border); position: sticky; top: 20px; height: fit-content; }
+        .doc-section     { background: var(--card); padding: 25px; border-radius: 8px; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+        .console-section { background: var(--card); padding: 25px; border-radius: 8px; border: 1px solid var(--border); position: sticky; top: 20px; height: fit-content; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
 
-        .alert-danger { grid-column: 1 / -1; background: rgba(255,68,68,0.1); border: 1px solid var(--danger); padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 20px; }
+        .alert-danger { grid-column: 1 / -1; background: rgba(220,53,69,0.08); border: 1px solid var(--danger); padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 20px; }
         .alert-danger h3 { color: var(--danger); margin-top: 0; }
 
-        pre  { background: var(--code-bg); padding: 15px; border-radius: 5px; overflow-x: auto; border: 1px solid #333; color: #a5d6a7; font-size: 0.9em; margin: 0; }
-        code { font-family: 'Courier New', monospace; color: #ff9e42; }
-        .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 0.75em; font-weight: bold; background: #333; cursor: pointer; border: 1px solid transparent; transition: 0.2s; }
-        .badge:hover { border-color: var(--accent); color: white; }
+        pre  { background: var(--code-bg); padding: 15px; border-radius: 5px; overflow-x: auto; border: 1px solid var(--border); color: #2e7d32; font-size: 0.9em; margin: 0; }
+        code { font-family: 'Courier New', monospace; color: #0b5ed7; background: var(--code-bg); padding: 2px 5px; border-radius: 3px; }
+        pre code { background: transparent; padding: 0; color: inherit; }
+        .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 0.75em; font-weight: bold; background: #e9ecef; color: var(--text); cursor: pointer; border: 1px solid transparent; transition: 0.2s; }
+        .badge:hover { border-color: var(--accent); color: var(--accent); }
 
-        label    { display: block; margin: 12px 0 5px; color: #888; font-size: 0.85em; text-transform: uppercase; letter-spacing: 1px; }
-        input, select, textarea { width: 100%; padding: 10px; background: #222; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; font-family: 'Courier New', monospace; }
+        label    { display: block; margin: 12px 0 5px; color: var(--muted); font-size: 0.85em; text-transform: uppercase; letter-spacing: 1px; }
+        input, select, textarea { width: 100%; padding: 10px; background: #ffffff; border: 1px solid var(--border); color: var(--text); border-radius: 4px; box-sizing: border-box; font-family: 'Courier New', monospace; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(30,144,255,0.15); }
         button { background: var(--accent); color: white; border: none; padding: 12px; width: 100%; cursor: pointer; font-weight: bold; border-radius: 4px; margin-top: 20px; }
 
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 100; align-items: center; justify-content: center; }
-        .modal-content { background: var(--card); padding: 30px; border-radius: 10px; width: 90%; max-width: 600px; position: relative; border: 1px solid var(--border); }
-        .close-btn { position: absolute; top: 15px; right: 20px; color: #fff; cursor: pointer; font-size: 1.5em; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.45); z-index: 100; align-items: center; justify-content: center; }
+        .modal-content { background: var(--card); padding: 30px; border-radius: 10px; width: 90%; max-width: 600px; position: relative; border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,0.15); }
+        .close-btn { position: absolute; top: 15px; right: 20px; color: var(--text); cursor: pointer; font-size: 1.5em; }
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-        .keygen-box  { background: #222; border: 1px solid var(--accent); padding: 15px; border-radius: 5px; margin-bottom: 25px; text-align: center; }
+        .keygen-box  { background: var(--code-bg); border: 1px solid var(--accent); padding: 15px; border-radius: 5px; margin-bottom: 25px; text-align: center; }
         .keygen-val  { font-family: monospace; font-size: 1.1em; color: var(--accent); display: block; margin: 10px 0; word-break: break-all; }
-        .btn-copy    { background: #444; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; font-size: 0.8em; }
+        .btn-copy    { background: var(--muted); color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; font-size: 0.8em; }
         .back-btn    { color: white; text-decoration: none; background: var(--accent); padding: 9px 18px; border-radius: 4px; font-weight: bold; display: inline-block; }
         .back-btn:hover { opacity: 0.85; }
     </style>
@@ -61,7 +63,7 @@ $csrfToken     = csrf_token();
     <header>
         <div>
             <h1>API Documentation</h1>
-            <small style="color:#888;">Endpoint: <?= htmlspecialchars($apiUrl) ?></small>
+            <small style="color:#6c757d;">Endpoint: <?= htmlspecialchars($apiUrl) ?></small>
         </div>
         <div><a href="<?= htmlspecialchars(BASE_URL) ?>" class="back-btn">&larr; Back to Dashboard</a></div>
     </header>
@@ -71,8 +73,8 @@ $csrfToken     = csrf_token();
         <h3>&#9888;&#65039; API IS DISABLED</h3>
         <p>You are using the default insecure API Key. For security, the API endpoint has been deactivated.</p>
         <p>Use the generator below to create a new key, update your <code>config.php</code>, and refresh this page.</p>
-        <div class="keygen-box" style="max-width:500px; margin:20px auto; background:#000;">
-            <strong style="color:white; font-size:0.9em;">GENERATE NEW SECURE KEY</strong>
+        <div class="keygen-box" style="max-width:500px; margin:20px auto;">
+            <strong style="color:#1a1a1a; font-size:0.9em;">GENERATE NEW SECURE KEY</strong>
             <span id="newKeyDisplay" class="keygen-val">Click generate below...</span>
             <button class="btn-copy" onclick="generateKey()">Generate &amp; Copy</button>
         </div>
@@ -83,7 +85,7 @@ $csrfToken     = csrf_token();
         <h2>1. Authentication</h2>
         <p>Pass your API key via the <code>X-Api-Key</code> HTTP header on every request. The key is set in <code>config.php</code>.</p>
         <pre>X-Api-Key: &lt;your-api-key&gt;</pre>
-        <p style="color:#888; font-size:0.85em;">&#128274; The API key is <strong>never</strong> exposed in this page's HTML source. The Live Console sends requests through a server-side proxy.</p>
+        <p style="color:#6c757d; font-size:0.85em;">&#128274; The API key is <strong>never</strong> exposed in this page's HTML source. The Live Console sends requests through a server-side proxy.</p>
 
         <h2>2. Endpoints &amp; Payloads</h2>
         <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:20px;">
@@ -130,7 +132,7 @@ curl_close($ch);</pre>
 
     <div class="console-section">
         <h2 style="margin-top:0">Live Console</h2>
-        <p style="color:#888; font-size:0.8em; margin-top:-10px;">Requests are proxied server-side. Your API key is never sent to the browser.</p>
+        <p style="color:#6c757d; font-size:0.8em; margin-top:-10px;">Requests are proxied server-side. Your API key is never sent to the browser.</p>
         <form id="apiForm">
             <input type="hidden" id="csrfToken" value="<?= htmlspecialchars($csrfToken) ?>">
 

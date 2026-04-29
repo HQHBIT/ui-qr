@@ -61,6 +61,35 @@ function require_auth() {
         header("Location: " . BASE_URL . "/login.php");
         exit;
     }
+
+    // DB-backed session validation: confirm the user still exists and refresh role.
+    // Uses a static flag so the DB is queried at most once per request even if
+    // require_auth() / require_role() are called multiple times.
+    static $validated = false;
+    if (!$validated) {
+        $validated = true;
+        global $db;
+        $uid = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : 0;
+        if ($uid > 0) {
+            $stmt = $db->prepare("SELECT username, role FROM users WHERE id = ? LIMIT 1");
+            $stmt->execute([$uid]);
+            $row = $stmt->fetch();
+            if (!$row) {
+                // User no longer exists — destroy session and redirect to login
+                session_unset();
+                session_destroy();
+                header("Location: " . BASE_URL . "/login.php");
+                exit;
+            }
+            // Refresh role (and username) from DB so demotion/promotion takes effect immediately
+            if ($row['role'] !== ($_SESSION['role'] ?? '')) {
+                $_SESSION['role'] = $row['role'];
+            }
+            if ($row['username'] !== ($_SESSION['username'] ?? '')) {
+                $_SESSION['username'] = $row['username'];
+            }
+        }
+    }
 }
 
 function current_user(): ?array {

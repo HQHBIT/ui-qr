@@ -50,9 +50,9 @@ if ($status === 'blocked') {
     } else {
         // SAFETY FALLBACK: If the file is missing or unreadable, show this HTML instead of a blank page.
         echo "<!DOCTYPE html>
-        <html style='background:#121212;color:#e0e0e0;font-family:sans-serif;height:100vh;display:flex;align-items:center;justify-content:center;'>
+        <html style='background:#f5f7fa;color:#1a1a1a;font-family:sans-serif;height:100vh;display:flex;align-items:center;justify-content:center;'>
             <div style='text-align:center;'>
-                <h1 style='color:#ff6600'>Link Disabled</h1>
+                <h1 style='color:#1e90ff'>Link Disabled</h1>
                 <p>This QR code is currently inactive.</p>
                 <small style='color:#666'>Error: Theme file not found at $disabledPage</small>
             </div>
@@ -68,6 +68,9 @@ $data = $product['target_data'];
 switch ($type) {
     case 'url':
     case 'social':
+        if (!preg_match('#^[a-z][a-z0-9+\-.]*://#i', $data)) {
+            $data = 'https://' . ltrim($data, '/');
+        }
         header("Location: " . $data);
         break;
 
