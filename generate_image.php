@@ -56,8 +56,10 @@ $ovr = function ($k, $default) use ($saved) {
         return preg_match('/^#[0-9a-fA-F]{6}$/', $v) ? strtolower($v) : ($saved[$k] ?? $default);
     }
     if ($k === 'gradient')     return $v === '1' || $v === 'true';
-    if ($k === 'module_shape') return in_array($v, ['square','dot','rounded','classy','diamond'], true) ? $v : $default;
-    if ($k === 'eye_shape')    return in_array($v, ['square','rounded','circle','leaf'], true) ? $v : $default;
+    if ($k === 'gradient_dir') return in_array($v, ['horizontal','vertical','diagonal','radial'], true) ? $v : $default;
+    if ($k === 'module_shape') return in_array($v, ['square','dot','rounded','classy','diamond','star','cross'], true) ? $v : $default;
+    if ($k === 'eye_shape')    return in_array($v, ['square','rounded','circle','leaf','frame','flower'], true) ? $v : $default;
+    if ($k === 'eye_inner')    return in_array($v, ['square','rounded','circle','dot','diamond'], true) ? $v : $default;
     return $default;
 };
 
@@ -65,18 +67,19 @@ $design = [
     'fg'           => $ovr('fg', '#000000'),
     'bg'           => $ovr('bg', '#ffffff'),
     'gradient'     => (bool)$ovr('gradient', false),
+    'gradient_dir' => $ovr('gradient_dir', 'diagonal'),
     'fg2'          => $ovr('fg2', '#1e90ff'),
     'module_shape' => $ovr('module_shape', 'square'),
     'eye_shape'    => $ovr('eye_shape', 'square'),
+    'eye_inner'    => $ovr('eye_inner', 'square'),
     'eye_color'    => $ovr('eye_color', $ovr('fg', '#000000')),
 ];
 
-// --- BUILD MATRIX ---
+// --- BUILD MATRIX (no quietzone — added in SVG) ---
 $options = new QROptions([
     'version'         => 7,
     'eccLevel'        => QRCode::ECC_H,
-    'addQuietzone'    => true,
-    'quietzoneSize'   => 4,
+    'addQuietzone'    => false,
 ]);
 $qrcode = new QRCode($options);
 $qrcode->addByteSegment($qrContent);
@@ -89,9 +92,10 @@ $logoFile = ($item['logo_path'] && file_exists(LOGO_DIR . '/' . $item['logo_path
     : null;
 
 // --- RENDER SVG ---
-$scale  = 14;            // px per module
-$pxSize = $size * $scale;
-$svg    = render_designer_svg($matrix, $design, $logoFile, $scale);
+$scale     = 14;            // px per module
+$quietCells = 4;
+$pxSize    = ($size + 2 * $quietCells) * $scale;
+$svg       = render_designer_svg($matrix, $design, $logoFile, $scale, $quietCells);
 
 if ($format === 'svg') {
     header('Content-Type: image/svg+xml');
@@ -141,25 +145,35 @@ exit;
 // RENDERERS
 // =========================================================================
 
-function render_designer_svg(QRMatrix $matrix, array $d, ?string $logoFile, int $scale): string {
-    $size  = $matrix->getSize();
-    $px    = $size * $scale;
-    $bg    = htmlspecialchars($d['bg'], ENT_QUOTES);
-    $fg    = htmlspecialchars($d['fg'], ENT_QUOTES);
-    $fg2   = htmlspecialchars($d['fg2'], ENT_QUOTES);
-    $eyeCo = htmlspecialchars($d['eye_color'], ENT_QUOTES);
-    $useGr = !empty($d['gradient']);
-    $fillData = $useGr ? "url(#qrg)" : $fg;
+function render_designer_svg(QRMatrix $matrix, array $d, ?string $logoFile, int $scale, int $qz): string {
+    $size      = $matrix->getSize();
+    $totalCells = $size + 2 * $qz;
+    $px        = $totalCells * $scale;
+    $offset    = $qz * $scale;
+    $bg        = htmlspecialchars($d['bg'], ENT_QUOTES);
+    $fg        = htmlspecialchars($d['fg'], ENT_QUOTES);
+    $fg2       = htmlspecialchars($d['fg2'], ENT_QUOTES);
+    $eyeCo     = htmlspecialchars($d['eye_color'], ENT_QUOTES);
+    $useGr     = !empty($d['gradient']);
+    $fillData  = $useGr ? "url(#qrg)" : $fg;
 
     $defs = '';
     if ($useGr) {
-        $defs .= '<linearGradient id="qrg" x1="0%" y1="0%" x2="100%" y2="100%">'
-              . '<stop offset="0%" stop-color="' . $fg  . '"/>'
-              . '<stop offset="100%" stop-color="' . $fg2 . '"/>'
-              . '</linearGradient>';
+        $dir = $d['gradient_dir'] ?? 'diagonal';
+        if ($dir === 'radial') {
+            $defs .= '<radialGradient id="qrg" cx="50%" cy="50%" r="60%">'
+                  . '<stop offset="0%" stop-color="' . $fg  . '"/>'
+                  . '<stop offset="100%" stop-color="' . $fg2 . '"/></radialGradient>';
+        } else {
+            $coords = ['horizontal' => '0% 0% 100% 0%', 'vertical' => '0% 0% 0% 100%', 'diagonal' => '0% 0% 100% 100%'];
+            [$x1,$y1,$x2,$y2] = explode(' ', $coords[$dir] ?? $coords['diagonal']);
+            $defs .= '<linearGradient id="qrg" x1="' . $x1 . '" y1="' . $y1 . '" x2="' . $x2 . '" y2="' . $y2 . '">'
+                  . '<stop offset="0%" stop-color="' . $fg  . '"/>'
+                  . '<stop offset="100%" stop-color="' . $fg2 . '"/></linearGradient>';
+        }
     }
 
-    // Identify finder eye centers (top-left, top-right, bottom-left)
+    // Eye finder regions in matrix coords
     $eyes = [
         [0, 0],
         [$size - 7, 0],
@@ -172,21 +186,39 @@ function render_designer_svg(QRMatrix $matrix, array $d, ?string $logoFile, int 
         return false;
     };
 
+    // Reserve circular logo space (skip data modules under it) so logo doesn't overlap dots
+    $logoCells = 0;
+    if ($logoFile) {
+        $logoCells = (int)round($size * 0.22);
+        if ($logoCells % 2 === 0) $logoCells++; // odd, centered
+    }
+    $logoCx = $size / 2;
+    $logoCy = $size / 2;
+    $logoR  = $logoCells / 2 + 0.5;
+
     $modules = '';
     for ($y = 0; $y < $size; $y++) {
         for ($x = 0; $x < $size; $x++) {
             if (!$matrix->check($x, $y)) continue;
-            if ($isInEye($x, $y))         continue; // drawn separately
-            $cx = $x * $scale + $scale / 2;
-            $cy = $y * $scale + $scale / 2;
-            $modules .= module_shape_svg($d['module_shape'], $x * $scale, $y * $scale, $scale, $cx, $cy);
+            if ($isInEye($x, $y))         continue;
+            if ($logoCells > 0) {
+                $dx = $x + 0.5 - $logoCx;
+                $dy = $y + 0.5 - $logoCy;
+                if (($dx*$dx + $dy*$dy) <= ($logoR * $logoR)) continue;
+            }
+            $px_x = $x * $scale;
+            $px_y = $y * $scale;
+            $cx   = $px_x + $scale / 2;
+            $cy   = $px_y + $scale / 2;
+            $modules .= module_shape_svg($d['module_shape'], $px_x, $px_y, $scale, $cx, $cy);
         }
     }
 
     // Eyes
     $eyeSvg = '';
     foreach ($eyes as [$ex, $ey]) {
-        $eyeSvg .= eye_shape_svg($d['eye_shape'], $ex * $scale, $ey * $scale, $scale, $eyeCo, $bg);
+        $eyeSvg .= eye_shape_svg($d['eye_shape'], $d['eye_inner'] ?? 'square',
+            $ex * $scale, $ey * $scale, $scale, $eyeCo, $bg);
     }
 
     // Logo
@@ -196,12 +228,15 @@ function render_designer_svg(QRMatrix $matrix, array $d, ?string $logoFile, int 
         $info  = getimagesizefromstring($bytes);
         $mime  = $info['mime'] ?? 'image/png';
         $b64   = base64_encode($bytes);
-        $lw    = (int)($px / 4);
+        // logo box sized to match the cleared circle
+        $lw    = (int)($logoCells * $scale * 0.85);
         $lh    = $lw;
-        $lx    = (int)(($px - $lw) / 2);
-        $ly    = (int)(($px - $lh) / 2);
-        $pad   = (int)($scale * 0.6);
-        $logoSvg = '<rect x="' . ($lx - $pad) . '" y="' . ($ly - $pad) . '" width="' . ($lw + 2*$pad) . '" height="' . ($lh + 2*$pad) . '" rx="6" fill="' . $bg . '"/>'
+        $cxAbs = ($logoCx) * $scale;
+        $cyAbs = ($logoCy) * $scale;
+        $lx    = (int)($cxAbs - $lw / 2);
+        $ly    = (int)($cyAbs - $lh / 2);
+        $pad   = (int)($scale * 0.4);
+        $logoSvg = '<rect x="' . ($lx - $pad) . '" y="' . ($ly - $pad) . '" width="' . ($lw + 2*$pad) . '" height="' . ($lh + 2*$pad) . '" rx="' . ($scale*0.6) . '" fill="' . $bg . '"/>'
                  . '<image x="' . $lx . '" y="' . $ly . '" width="' . $lw . '" height="' . $lh . '" href="data:' . $mime . ';base64,' . $b64 . '" preserveAspectRatio="xMidYMid meet"/>';
     }
 
@@ -210,65 +245,174 @@ function render_designer_svg(QRMatrix $matrix, array $d, ?string $logoFile, int 
         . 'viewBox="0 0 ' . $px . ' ' . $px . '" width="' . $px . '" height="' . $px . '" shape-rendering="geometricPrecision">'
         . '<defs>' . $defs . '</defs>'
         . '<rect width="100%" height="100%" fill="' . $bg . '"/>'
-        . '<g fill="' . $fillData . '">' . $modules . '</g>'
-        . $eyeSvg
-        . $logoSvg
+        . '<g transform="translate(' . $offset . ',' . $offset . ')">'
+        .   '<g fill="' . $fillData . '">' . $modules . '</g>'
+        .   $eyeSvg
+        .   $logoSvg
+        . '</g>'
         . '</svg>';
 }
 
 function module_shape_svg(string $shape, float $x, float $y, float $s, float $cx, float $cy): string {
     switch ($shape) {
         case 'dot':
-            return '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . ($s * 0.45) . '"/>';
+            return '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . ($s * 0.46) . '"/>';
         case 'rounded':
-            return '<rect x="' . $x . '" y="' . $y . '" width="' . $s . '" height="' . $s . '" rx="' . ($s * 0.35) . '"/>';
+            return '<rect x="' . $x . '" y="' . $y . '" width="' . $s . '" height="' . $s . '" rx="' . ($s * 0.4) . '"/>';
         case 'classy':
-            $r = $s * 0.4;
+            // Top-left + bottom-right rounded; other corners square
+            $r = $s * 0.45;
             return '<path d="M' . ($x + $r) . ' ' . $y
-                 . ' h' . ($s - $r) . ' v' . ($s - $r)
-                 . ' a' . $r . ' ' . $r . ' 0 0 1 -' . $r . ' ' . $r
-                 . ' h-' . ($s - $r) . ' v-' . ($s - $r)
-                 . ' a' . $r . ' ' . $r . ' 0 0 1 ' . $r . ' -' . $r . ' z"/>';
+                 . ' L' . ($x + $s) . ' ' . $y
+                 . ' L' . ($x + $s) . ' ' . ($y + $s - $r)
+                 . ' A' . $r . ' ' . $r . ' 0 0 1 ' . ($x + $s - $r) . ' ' . ($y + $s)
+                 . ' L' . $x . ' ' . ($y + $s)
+                 . ' L' . $x . ' ' . ($y + $r)
+                 . ' A' . $r . ' ' . $r . ' 0 0 1 ' . ($x + $r) . ' ' . $y . ' Z"/>';
         case 'diamond':
-            return '<path d="M' . $cx . ' ' . $y
-                 . ' L' . ($x + $s) . ' ' . $cy
-                 . ' L' . $cx . ' ' . ($y + $s)
-                 . ' L' . $x . ' ' . $cy . ' z"/>';
+            return '<path d="M' . $cx . ' ' . ($y + 0.5)
+                 . ' L' . ($x + $s - 0.5) . ' ' . $cy
+                 . ' L' . $cx . ' ' . ($y + $s - 0.5)
+                 . ' L' . ($x + 0.5) . ' ' . $cy . ' z"/>';
+        case 'star':
+            $r1 = $s * 0.5; $r2 = $s * 0.22;
+            $pts = '';
+            for ($i = 0; $i < 10; $i++) {
+                $r = $i % 2 === 0 ? $r1 : $r2;
+                $a = -M_PI / 2 + $i * M_PI / 5;
+                $px = $cx + $r * cos($a);
+                $py = $cy + $r * sin($a);
+                $pts .= ($i ? ' ' : '') . round($px, 2) . ',' . round($py, 2);
+            }
+            return '<polygon points="' . $pts . '"/>';
+        case 'cross':
+            $t = $s * 0.36;
+            return '<path d="M' . ($cx - $t/2) . ' ' . ($y + 0.5)
+                 . ' h' . $t . ' v' . (($s - $t)/2)
+                 . ' h' . (($s - $t)/2) . ' v' . $t
+                 . ' h-' . (($s - $t)/2) . ' v' . (($s - $t)/2)
+                 . ' h-' . $t . ' v-' . (($s - $t)/2)
+                 . ' h-' . (($s - $t)/2) . ' v-' . $t
+                 . ' h' . (($s - $t)/2) . ' z"/>';
         case 'square':
         default:
             return '<rect x="' . $x . '" y="' . $y . '" width="' . $s . '" height="' . $s . '"/>';
     }
 }
 
-function eye_shape_svg(string $shape, float $x, float $y, float $s, string $color, string $bg): string {
+// Build outer eye ring path (7×7 outer minus 5×5 inner cutout)
+function eye_outer_path(string $shape, float $x, float $y, float $s, string $color): string {
     $outer = 7 * $s;
-    $mid   = 5 * $s;
-    $inner = 3 * $s;
-    $cx    = $x + $outer / 2;
-    $cy    = $y + $outer / 2;
+    $cx = $x + $outer / 2;
+    $cy = $y + $outer / 2;
+    $or = $outer / 2;
+    $ir = (5 * $s) / 2; // inner radius for cutout
+    $ix = $x + $s;
+    $iy = $y + $s;
+    $iw = 5 * $s;
 
     if ($shape === 'circle') {
-        return '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . ($outer/2) . '" fill="' . $color . '"/>'
-             . '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . ($mid/2)   . '" fill="' . $bg    . '"/>'
-             . '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . ($inner/2) . '" fill="' . $color . '"/>';
+        // Outer circle with circular hole (even-odd)
+        return '<path fill-rule="evenodd" fill="' . $color . '" d="'
+             . 'M' . ($cx - $or) . ' ' . $cy
+             . ' a' . $or . ' ' . $or . ' 0 1 0 ' . (2*$or) . ' 0'
+             . ' a' . $or . ' ' . $or . ' 0 1 0 -' . (2*$or) . ' 0 Z'
+             . ' M' . ($cx - $ir) . ' ' . $cy
+             . ' a' . $ir . ' ' . $ir . ' 0 1 1 ' . (2*$ir) . ' 0'
+             . ' a' . $ir . ' ' . $ir . ' 0 1 1 -' . (2*$ir) . ' 0 Z"/>';
     }
     if ($shape === 'rounded') {
-        return '<rect x="' . $x . '" y="' . $y . '" width="' . $outer . '" height="' . $outer . '" rx="' . ($s*1.5) . '" fill="' . $color . '"/>'
-             . '<rect x="' . ($x+$s) . '" y="' . ($y+$s) . '" width="' . $mid . '" height="' . $mid . '" rx="' . ($s*1.0) . '" fill="' . $bg . '"/>'
-             . '<rect x="' . ($x+2*$s) . '" y="' . ($y+2*$s) . '" width="' . $inner . '" height="' . $inner . '" rx="' . ($s*0.5) . '" fill="' . $color . '"/>';
+        $r1 = $s * 1.6;
+        $r2 = $s * 1.0;
+        return '<path fill-rule="evenodd" fill="' . $color . '" d="'
+             . rounded_rect_path($x, $y, $outer, $outer, $r1)
+             . rounded_rect_path($ix, $iy, $iw, $iw, $r2)
+             . '"/>';
     }
     if ($shape === 'leaf') {
-        // Asymmetric rounding: top-left + bottom-right corners
-        $rOuter = $s * 2.2;
-        $rInner = $s * 1.2;
-        return '<rect x="' . $x . '" y="' . $y . '" width="' . $outer . '" height="' . $outer . '" rx="' . $rOuter . '" ry="' . ($s*0.6) . '" fill="' . $color . '"/>'
-             . '<rect x="' . ($x+$s) . '" y="' . ($y+$s) . '" width="' . $mid . '" height="' . $mid . '" rx="' . $rInner . '" ry="' . ($s*0.4) . '" fill="' . $bg . '"/>'
-             . '<rect x="' . ($x+2*$s) . '" y="' . ($y+2*$s) . '" width="' . $inner . '" height="' . $inner . '" rx="' . ($s*0.7) . '" fill="' . $color . '"/>';
+        // top-left + bottom-right rounded, other two square
+        return '<path fill-rule="evenodd" fill="' . $color . '" d="'
+             . leaf_rect_path($x, $y, $outer, $outer, $s * 1.8)
+             . leaf_rect_path($ix, $iy, $iw, $iw, $s * 1.0)
+             . '"/>';
+    }
+    if ($shape === 'frame') {
+        // square outer, square inner — same as square ring (no inner cutout overlap)
+        return '<path fill-rule="evenodd" fill="' . $color . '" d="'
+             . 'M' . $x . ' ' . $y . ' h' . $outer . ' v' . $outer . ' h-' . $outer . ' Z '
+             . 'M' . $ix . ' ' . $iy . ' v' . $iw . ' h' . $iw . ' v-' . $iw . ' Z"/>';
+    }
+    if ($shape === 'flower') {
+        // Outer rounded with notches — soft cloud-like via rounded-rect frame
+        $r1 = $s * 2.4;
+        $r2 = $s * 1.6;
+        return '<path fill-rule="evenodd" fill="' . $color . '" d="'
+             . rounded_rect_path($x, $y, $outer, $outer, $r1)
+             . rounded_rect_path($ix, $iy, $iw, $iw, $r2)
+             . '"/>';
     }
     // square
-    return '<rect x="' . $x . '" y="' . $y . '" width="' . $outer . '" height="' . $outer . '" fill="' . $color . '"/>'
-         . '<rect x="' . ($x+$s) . '" y="' . ($y+$s) . '" width="' . $mid . '" height="' . $mid . '" fill="' . $bg . '"/>'
-         . '<rect x="' . ($x+2*$s) . '" y="' . ($y+2*$s) . '" width="' . $inner . '" height="' . $inner . '" fill="' . $color . '"/>';
+    return '<path fill-rule="evenodd" fill="' . $color . '" d="'
+         . 'M' . $x . ' ' . $y . ' h' . $outer . ' v' . $outer . ' h-' . $outer . ' Z '
+         . 'M' . $ix . ' ' . $iy . ' v' . $iw . ' h' . $iw . ' v-' . $iw . ' Z"/>';
+}
+
+function eye_inner_shape(string $shape, float $x, float $y, float $s, string $color): string {
+    $iw = 3 * $s;
+    $ix = $x + 2 * $s;
+    $iy = $y + 2 * $s;
+    $cx = $ix + $iw / 2;
+    $cy = $iy + $iw / 2;
+
+    if ($shape === 'circle') {
+        return '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . ($iw/2) . '" fill="' . $color . '"/>';
+    }
+    if ($shape === 'dot') {
+        return '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . ($iw*0.42) . '" fill="' . $color . '"/>';
+    }
+    if ($shape === 'rounded') {
+        return '<rect x="' . $ix . '" y="' . $iy . '" width="' . $iw . '" height="' . $iw . '" rx="' . ($s*0.7) . '" fill="' . $color . '"/>';
+    }
+    if ($shape === 'diamond') {
+        return '<path fill="' . $color . '" d="M' . $cx . ' ' . $iy
+             . ' L' . ($ix + $iw) . ' ' . $cy
+             . ' L' . $cx . ' ' . ($iy + $iw)
+             . ' L' . $ix . ' ' . $cy . ' Z"/>';
+    }
+    return '<rect x="' . $ix . '" y="' . $iy . '" width="' . $iw . '" height="' . $iw . '" fill="' . $color . '"/>';
+}
+
+function eye_shape_svg(string $outerShape, string $innerShape, float $x, float $y, float $s, string $color, string $bg): string {
+    // Outer ring is one path with even-odd fill creating the cutout. Background shows through cutout naturally — no need to draw bg fill.
+    return eye_outer_path($outerShape, $x, $y, $s, $color)
+         . eye_inner_shape($innerShape, $x, $y, $s, $color);
+}
+
+function rounded_rect_path(float $x, float $y, float $w, float $h, float $r): string {
+    $r = min($r, $w / 2, $h / 2);
+    return 'M' . ($x + $r) . ' ' . $y
+         . ' h' . ($w - 2*$r)
+         . ' a' . $r . ' ' . $r . ' 0 0 1 ' . $r . ' ' . $r
+         . ' v' . ($h - 2*$r)
+         . ' a' . $r . ' ' . $r . ' 0 0 1 -' . $r . ' ' . $r
+         . ' h-' . ($w - 2*$r)
+         . ' a' . $r . ' ' . $r . ' 0 0 1 -' . $r . ' -' . $r
+         . ' v-' . ($h - 2*$r)
+         . ' a' . $r . ' ' . $r . ' 0 0 1 ' . $r . ' -' . $r
+         . ' Z ';
+}
+
+function leaf_rect_path(float $x, float $y, float $w, float $h, float $r): string {
+    // top-left + bottom-right rounded; top-right + bottom-left square
+    $r = min($r, $w / 2, $h / 2);
+    return 'M' . ($x + $r) . ' ' . $y
+         . ' L' . ($x + $w) . ' ' . $y
+         . ' L' . ($x + $w) . ' ' . ($y + $h - $r)
+         . ' A' . $r . ' ' . $r . ' 0 0 1 ' . ($x + $w - $r) . ' ' . ($y + $h)
+         . ' L' . $x . ' ' . ($y + $h)
+         . ' L' . $x . ' ' . ($y + $r)
+         . ' A' . $r . ' ' . $r . ' 0 0 1 ' . ($x + $r) . ' ' . $y
+         . ' Z ';
 }
 
 function svg_to_raster(string $svg, string $format, int $px): ?string {

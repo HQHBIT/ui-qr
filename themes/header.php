@@ -56,6 +56,27 @@
         /* Inputs */
         input, select, textarea { width: 100%; padding: 12px; margin: 8px 0 20px; background: #ffffff; border: 1px solid var(--border); color: var(--text); border-radius: 4px; box-sizing: border-box; font-family: inherit; }
         input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(30,144,255,0.15); }
+        input[type="color"] { width: 100%; height: 40px; padding: 2px; cursor: pointer; }
+        input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+        input[type="color"]::-webkit-color-swatch { border: 1px solid var(--border); border-radius: 3px; }
+        input[type="checkbox"], input[type="radio"] { width: auto; margin: 0; padding: 0; }
+        input[type="file"] { padding: 8px; }
+
+        /* Designer */
+        .designer-grid { display: grid; grid-template-columns: 280px 1fr; gap: 24px; align-items: start; }
+        .designer-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+        .designer-controls label { display: block; margin: 0; font-size: 0.82rem; color: var(--muted); font-weight: 600; }
+        .designer-controls label > input, .designer-controls label > select { margin: 4px 0 0; padding: 8px 10px; }
+        .designer-controls .full { grid-column: 1 / -1; }
+        .preset-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+        .preset-chip { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--border); cursor: pointer; padding: 0; position: relative; overflow: hidden; }
+        .preset-chip:hover { border-color: var(--accent); transform: scale(1.08); }
+        .preview-card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 16px; text-align: center; }
+        .preview-card img { width: 240px; height: 240px; display: block; margin: 0 auto; }
+        .dl-row { display: flex; gap: 6px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+        .swatch-pair { display: flex; align-items: center; gap: 8px; }
+        .swatch-hex { font-family: monospace; font-size: 0.78rem; color: var(--muted); }
+        @media (max-width: 720px) { .designer-grid { grid-template-columns: 1fr; } }
 
         /* Toggle Switch */
         .switch { position: relative; display: inline-block; width: 40px; height: 20px; margin: 0 15px; }

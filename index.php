@@ -13,15 +13,19 @@ function sanitize_design(array $in): array {
     $hex = function ($v, $default) {
         return preg_match('/^#[0-9a-fA-F]{6}$/', (string)$v) ? strtolower($v) : $default;
     };
-    $allowedModule = ['square','dot','rounded','classy','diamond'];
-    $allowedEye    = ['square','rounded','circle','leaf'];
+    $allowedModule   = ['square','dot','rounded','classy','diamond','star','cross'];
+    $allowedEye      = ['square','rounded','circle','leaf','frame','flower'];
+    $allowedEyeInner = ['square','rounded','circle','dot','diamond'];
+    $allowedGradDir  = ['horizontal','vertical','diagonal','radial'];
     return [
         'fg'           => $hex($in['fg']           ?? '#000000', '#000000'),
         'bg'           => $hex($in['bg']           ?? '#ffffff', '#ffffff'),
         'gradient'     => !empty($in['gradient']),
+        'gradient_dir' => in_array($in['gradient_dir'] ?? 'diagonal', $allowedGradDir, true)  ? $in['gradient_dir'] : 'diagonal',
         'fg2'          => $hex($in['fg2']          ?? '#1e90ff', '#1e90ff'),
-        'module_shape' => in_array($in['module_shape'] ?? 'square', $allowedModule, true) ? $in['module_shape'] : 'square',
-        'eye_shape'    => in_array($in['eye_shape']    ?? 'square', $allowedEye,    true) ? $in['eye_shape']    : 'square',
+        'module_shape' => in_array($in['module_shape'] ?? 'square', $allowedModule, true)    ? $in['module_shape'] : 'square',
+        'eye_shape'    => in_array($in['eye_shape']    ?? 'square', $allowedEye, true)       ? $in['eye_shape']    : 'square',
+        'eye_inner'    => in_array($in['eye_inner']    ?? 'square', $allowedEyeInner, true)  ? $in['eye_inner']    : 'square',
         'eye_color'    => $hex($in['eye_color']    ?? '#000000', '#000000'),
     ];
 }
@@ -462,48 +466,93 @@ include THEME_PATH . '/header.php';
 
 <!-- ── QR Designer Modal ──────────────────────────────────────────────────────── -->
 <div id="qrModal" class="modal">
-    <div class="modal-content" style="max-width:760px;">
+    <div class="modal-content" style="max-width:880px;">
         <svg class="close-icon" onclick="closeModal('qrModal')" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        <h2 id="qrTitle">QR Designer</h2>
-        <div style="display:grid; grid-template-columns: 250px 1fr; gap:24px; align-items:start; margin-top:10px;">
-            <div style="text-align:center;">
-                <img id="qrImage" src="" style="width:240px; height:240px; background:#fff; border:1px solid var(--border); border-radius:8px;" alt="QR Code">
-                <div style="display:flex; gap:6px; justify-content:center; margin-top:14px; flex-wrap:wrap;">
+        <h2 id="qrTitle" style="margin-bottom:18px;">QR Designer</h2>
+
+        <div class="designer-grid">
+            <div class="preview-card">
+                <img id="qrImage" src="" alt="QR Code">
+                <div class="dl-row">
                     <a id="dlPng" href="#" download class="btn btn-sm">PNG</a>
                     <a id="dlJpg" href="#" download class="btn btn-sm">JPG</a>
                     <a id="dlSvg" href="#" download class="btn btn-sm">SVG</a>
                     <button onclick="printQR()" class="btn btn-sm" style="background:#6c757d;">Print</button>
                 </div>
-            </div>
-            <div>
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                    <label style="margin:0;">Foreground<input type="color" id="dFg" value="#000000"></label>
-                    <label style="margin:0;">Background<input type="color" id="dBg" value="#ffffff"></label>
-                    <label style="margin:0;">Module shape
-                        <select id="dModule">
-                            <option value="square">Square</option>
-                            <option value="dot">Dots</option>
-                            <option value="rounded">Rounded</option>
-                            <option value="classy">Classy</option>
-                            <option value="diamond">Diamond</option>
-                        </select>
-                    </label>
-                    <label style="margin:0;">Eye shape
-                        <select id="dEye">
-                            <option value="square">Square</option>
-                            <option value="rounded">Rounded</option>
-                            <option value="circle">Circle</option>
-                            <option value="leaf">Leaf</option>
-                        </select>
-                    </label>
-                    <label style="margin:0;">Eye color<input type="color" id="dEyeColor" value="#000000"></label>
-                    <label style="margin:0; display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" id="dGradient" style="width:auto; margin:0;"> Gradient
-                    </label>
-                    <label style="margin:0;">Gradient end<input type="color" id="dFg2" value="#1e90ff"></label>
+                <div style="margin-top:14px;">
+                    <div style="font-size:0.78rem; color:var(--muted); font-weight:600; text-align:left; margin-bottom:6px;">PRESETS</div>
+                    <div class="preset-row" id="dPresets"></div>
                 </div>
-                <button id="dSave" class="btn btn-sm" style="margin-top:14px;">Save Design</button>
-                <span id="dSaveMsg" style="margin-left:10px; color:var(--muted); font-size:0.85em;"></span>
+            </div>
+
+            <div class="designer-controls">
+                <label>Foreground
+                    <div class="swatch-pair">
+                        <input type="color" id="dFg" value="#000000">
+                    </div>
+                </label>
+                <label>Background
+                    <div class="swatch-pair">
+                        <input type="color" id="dBg" value="#ffffff">
+                    </div>
+                </label>
+
+                <label>Module shape
+                    <select id="dModule">
+                        <option value="square">Square</option>
+                        <option value="dot">Dots</option>
+                        <option value="rounded">Rounded</option>
+                        <option value="classy">Classy</option>
+                        <option value="diamond">Diamond</option>
+                        <option value="star">Star</option>
+                        <option value="cross">Cross</option>
+                    </select>
+                </label>
+                <label>Eye frame
+                    <select id="dEye">
+                        <option value="square">Square</option>
+                        <option value="rounded">Rounded</option>
+                        <option value="circle">Circle</option>
+                        <option value="leaf">Leaf</option>
+                        <option value="flower">Flower</option>
+                        <option value="frame">Frame</option>
+                    </select>
+                </label>
+
+                <label>Eye pupil
+                    <select id="dEyeInner">
+                        <option value="square">Square</option>
+                        <option value="rounded">Rounded</option>
+                        <option value="circle">Circle</option>
+                        <option value="dot">Small dot</option>
+                        <option value="diamond">Diamond</option>
+                    </select>
+                </label>
+                <label>Eye color
+                    <input type="color" id="dEyeColor" value="#000000">
+                </label>
+
+                <label class="full" style="display:flex; align-items:center; gap:10px; margin:0;">
+                    <input type="checkbox" id="dGradient"> <span>Use gradient fill</span>
+                </label>
+
+                <label>Gradient end
+                    <input type="color" id="dFg2" value="#1e90ff" disabled>
+                </label>
+                <label>Gradient direction
+                    <select id="dGradDir" disabled>
+                        <option value="diagonal">Diagonal</option>
+                        <option value="horizontal">Horizontal</option>
+                        <option value="vertical">Vertical</option>
+                        <option value="radial">Radial</option>
+                    </select>
+                </label>
+
+                <div class="full" style="display:flex; align-items:center; gap:12px; margin-top:6px;">
+                    <button id="dSave" class="btn btn-sm">Save Design</button>
+                    <button id="dReset" class="btn btn-sm" style="background:#6c757d;">Reset</button>
+                    <span id="dSaveMsg" style="color:var(--muted); font-size:0.85em;"></span>
+                </div>
             </div>
         </div>
     </div>
@@ -616,43 +665,98 @@ function toggleQR(id, csrf) {
 
 // ── Designer modal ───────────────────────────────────────────────────────────
 let DESIGNER_STATE = { uuid: null, id: null, title: '' };
-const DESIGN_DEFAULT = { fg:'#000000', bg:'#ffffff', gradient:false, fg2:'#1e90ff', module_shape:'square', eye_shape:'square', eye_color:'#000000' };
+const DESIGN_DEFAULT = {
+    fg:'#000000', bg:'#ffffff',
+    gradient:false, gradient_dir:'diagonal', fg2:'#1e90ff',
+    module_shape:'square',
+    eye_shape:'square', eye_inner:'square',
+    eye_color:'#000000'
+};
+
+const PRESETS = [
+    { name:'Classic',    fg:'#000000', bg:'#ffffff', module_shape:'square',  eye_shape:'square',  eye_inner:'square',  eye_color:'#000000', gradient:false },
+    { name:'Ocean',      fg:'#0a4a6e', bg:'#e8f4fa', module_shape:'rounded', eye_shape:'rounded', eye_inner:'rounded', eye_color:'#0a4a6e', gradient:true,  fg2:'#1e90ff', gradient_dir:'diagonal' },
+    { name:'Sunset',     fg:'#d63384', bg:'#fff7e6', module_shape:'dot',     eye_shape:'circle',  eye_inner:'circle',  eye_color:'#d63384', gradient:true,  fg2:'#fd7e14', gradient_dir:'horizontal' },
+    { name:'Forest',     fg:'#1b5e20', bg:'#f1f8e9', module_shape:'rounded', eye_shape:'leaf',    eye_inner:'rounded', eye_color:'#2e7d32', gradient:true,  fg2:'#558b2f', gradient_dir:'vertical' },
+    { name:'Royal',      fg:'#4527a0', bg:'#f3e5f5', module_shape:'classy',  eye_shape:'rounded', eye_inner:'rounded', eye_color:'#4527a0', gradient:true,  fg2:'#7b1fa2', gradient_dir:'radial' },
+    { name:'Mono Dots',  fg:'#1a1a1a', bg:'#ffffff', module_shape:'dot',     eye_shape:'circle',  eye_inner:'circle',  eye_color:'#1a1a1a', gradient:false },
+    { name:'Neon',       fg:'#00e5ff', bg:'#0a1929', module_shape:'dot',     eye_shape:'circle',  eye_inner:'dot',     eye_color:'#00e5ff', gradient:true,  fg2:'#7c4dff', gradient_dir:'diagonal' },
+    { name:'Coral',      fg:'#c2185b', bg:'#ffe9ec', module_shape:'star',    eye_shape:'flower',  eye_inner:'circle',  eye_color:'#ad1457', gradient:false },
+    { name:'Diamond',    fg:'#000000', bg:'#ffffff', module_shape:'diamond', eye_shape:'leaf',    eye_inner:'diamond', eye_color:'#000000', gradient:false },
+];
+
+function previewSwatch(p) {
+    if (p.gradient) {
+        return 'linear-gradient(135deg,' + p.fg + ',' + p.fg2 + ')';
+    }
+    return 'linear-gradient(135deg,' + p.fg + ' 50%,' + p.bg + ' 50%)';
+}
+
+function buildPresetChips() {
+    const row = document.getElementById('dPresets');
+    if (!row || row.dataset.built) return;
+    row.dataset.built = '1';
+    PRESETS.forEach((p, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'preset-chip';
+        b.title = p.name;
+        b.style.background = previewSwatch(p);
+        b.addEventListener('click', () => { applyDesignerInputs(p); refreshPreview(); });
+        row.appendChild(b);
+    });
+}
 
 function readDesigner() {
     return {
         fg:           document.getElementById('dFg').value,
         bg:           document.getElementById('dBg').value,
         gradient:     document.getElementById('dGradient').checked,
+        gradient_dir: document.getElementById('dGradDir').value,
         fg2:          document.getElementById('dFg2').value,
         module_shape: document.getElementById('dModule').value,
         eye_shape:    document.getElementById('dEye').value,
+        eye_inner:    document.getElementById('dEyeInner').value,
         eye_color:    document.getElementById('dEyeColor').value,
     };
 }
 
 function applyDesignerInputs(d) {
     d = Object.assign({}, DESIGN_DEFAULT, d || {});
-    document.getElementById('dFg').value       = d.fg;
-    document.getElementById('dBg').value       = d.bg;
+    document.getElementById('dFg').value         = d.fg;
+    document.getElementById('dBg').value         = d.bg;
     document.getElementById('dGradient').checked = !!d.gradient;
-    document.getElementById('dFg2').value      = d.fg2;
-    document.getElementById('dModule').value   = d.module_shape;
-    document.getElementById('dEye').value      = d.eye_shape;
-    document.getElementById('dEyeColor').value = d.eye_color;
+    document.getElementById('dGradDir').value    = d.gradient_dir;
+    document.getElementById('dFg2').value        = d.fg2;
+    document.getElementById('dModule').value     = d.module_shape;
+    document.getElementById('dEye').value        = d.eye_shape;
+    document.getElementById('dEyeInner').value   = d.eye_inner;
+    document.getElementById('dEyeColor').value   = d.eye_color;
+    syncGradientEnable();
+}
+
+function syncGradientEnable() {
+    const on = document.getElementById('dGradient').checked;
+    document.getElementById('dFg2').disabled    = !on;
+    document.getElementById('dGradDir').disabled = !on;
 }
 
 function buildDesignQS(d) {
     const p = new URLSearchParams();
     p.set('fg', d.fg); p.set('bg', d.bg);
     p.set('fg2', d.fg2); p.set('eye_color', d.eye_color);
-    p.set('module_shape', d.module_shape); p.set('eye_shape', d.eye_shape);
+    p.set('module_shape', d.module_shape);
+    p.set('eye_shape', d.eye_shape);
+    p.set('eye_inner', d.eye_inner);
     p.set('gradient', d.gradient ? '1' : '0');
+    p.set('gradient_dir', d.gradient_dir);
     return p.toString();
 }
 
 let previewTimer = null;
 function refreshPreview() {
     if (!DESIGNER_STATE.uuid) return;
+    syncGradientEnable();
     clearTimeout(previewTimer);
     previewTimer = setTimeout(() => {
         const d = readDesigner();
@@ -669,10 +773,12 @@ function refreshPreview() {
     }, 120);
 }
 
-['dFg','dBg','dFg2','dEyeColor','dModule','dEye','dGradient'].forEach(id => {
+['dFg','dBg','dFg2','dEyeColor','dModule','dEye','dEyeInner','dGradient','dGradDir'].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.addEventListener('input',  refreshPreview);
-    if (el) el.addEventListener('change', refreshPreview);
+    if (el) {
+        el.addEventListener('input',  refreshPreview);
+        el.addEventListener('change', refreshPreview);
+    }
 });
 
 document.getElementById('dSave').addEventListener('click', function() {
@@ -687,13 +793,19 @@ document.getElementById('dSave').addEventListener('click', function() {
     msg.textContent = 'Saving...';
     fetch('index.php', { method: 'POST', body: fd })
         .then(r => r.json())
-        .then(() => { msg.textContent = 'Saved.'; setTimeout(() => msg.textContent = '', 1800); })
+        .then(() => { msg.textContent = 'Saved ✓'; setTimeout(() => msg.textContent = '', 1800); })
         .catch(() => { msg.textContent = 'Error'; });
+});
+
+document.getElementById('dReset').addEventListener('click', function() {
+    applyDesignerInputs(DESIGN_DEFAULT);
+    refreshPreview();
 });
 
 function showQR(uuid, title, id, design) {
     DESIGNER_STATE = { uuid, id, title };
-    document.getElementById('qrTitle').innerText = title;
+    document.getElementById('qrTitle').innerText = title + ' — Designer';
+    buildPresetChips();
     applyDesignerInputs(design);
     refreshPreview();
     openModal('qrModal');
