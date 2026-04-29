@@ -12,7 +12,7 @@ $isLoggedIn = isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true;
 
 $uuid   = $_GET['id'] ?? '';
 $token  = $_GET['token'] ?? '';
-$format = in_array($_GET['format'] ?? '', ['png', 'jpg', 'svg'], true) ? $_GET['format'] : 'png';
+$format = in_array($_GET['format'] ?? '', ['png', 'jpg', 'svg', 'json'], true) ? $_GET['format'] : 'png';
 
 if (!$uuid) { http_response_code(400); die('No ID'); }
 
@@ -86,6 +86,36 @@ $qrcode->addByteSegment($qrContent);
 $matrix = $qrcode->getQRMatrix();
 $size   = $matrix->getSize();
 
+// JSON matrix for client-side renderer (super fast preview)
+if ($format === 'json') {
+    $cells = [];
+    for ($y = 0; $y < $size; $y++) {
+        $row = [];
+        for ($x = 0; $x < $size; $x++) $row[] = $matrix->check($x, $y) ? 1 : 0;
+        $cells[] = $row;
+    }
+    $logoData = null;
+    $logoFullPath = ($item['logo_path'] && file_exists(LOGO_DIR . '/' . $item['logo_path']))
+        ? LOGO_DIR . '/' . $item['logo_path']
+        : null;
+    if ($logoFullPath) {
+        $bytes = file_get_contents($logoFullPath);
+        $info  = getimagesizefromstring($bytes);
+        $mime  = $info['mime'] ?? 'image/png';
+        $logoData = 'data:' . $mime . ';base64,' . base64_encode($bytes);
+    }
+    header('Content-Type: application/json');
+    header('Cache-Control: private, max-age=300');
+    echo json_encode([
+        'size'    => $size,
+        'cells'   => $cells,
+        'design'  => $design,
+        'hasLogo' => $logoData !== null,
+        'logo'    => $logoData,
+    ]);
+    exit;
+}
+
 // --- LOGO ---
 $logoFile = ($item['logo_path'] && file_exists(LOGO_DIR . '/' . $item['logo_path']))
     ? LOGO_DIR . '/' . $item['logo_path']
@@ -158,16 +188,23 @@ function render_designer_svg(QRMatrix $matrix, array $d, ?string $logoFile, int 
     $fillData  = $useGr ? "url(#qrg)" : $fg;
 
     $defs = '';
+    $qrPx = $size * $scale; // data area only (translate handles offset)
     if ($useGr) {
         $dir = $d['gradient_dir'] ?? 'diagonal';
         if ($dir === 'radial') {
-            $defs .= '<radialGradient id="qrg" cx="50%" cy="50%" r="60%">'
+            $defs .= '<radialGradient id="qrg" gradientUnits="userSpaceOnUse" '
+                  . 'cx="' . ($qrPx/2) . '" cy="' . ($qrPx/2) . '" r="' . ($qrPx*0.7) . '">'
                   . '<stop offset="0%" stop-color="' . $fg  . '"/>'
                   . '<stop offset="100%" stop-color="' . $fg2 . '"/></radialGradient>';
         } else {
-            $coords = ['horizontal' => '0% 0% 100% 0%', 'vertical' => '0% 0% 0% 100%', 'diagonal' => '0% 0% 100% 100%'];
-            [$x1,$y1,$x2,$y2] = explode(' ', $coords[$dir] ?? $coords['diagonal']);
-            $defs .= '<linearGradient id="qrg" x1="' . $x1 . '" y1="' . $y1 . '" x2="' . $x2 . '" y2="' . $y2 . '">'
+            $coordMap = [
+                'horizontal' => [0,         0,        $qrPx, 0],
+                'vertical'   => [0,         0,        0,     $qrPx],
+                'diagonal'   => [0,         0,        $qrPx, $qrPx],
+            ];
+            [$x1,$y1,$x2,$y2] = $coordMap[$dir] ?? $coordMap['diagonal'];
+            $defs .= '<linearGradient id="qrg" gradientUnits="userSpaceOnUse" '
+                  . 'x1="' . $x1 . '" y1="' . $y1 . '" x2="' . $x2 . '" y2="' . $y2 . '">'
                   . '<stop offset="0%" stop-color="' . $fg  . '"/>'
                   . '<stop offset="100%" stop-color="' . $fg2 . '"/></linearGradient>';
         }

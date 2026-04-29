@@ -86,6 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 <body>
     <div class="login-card">
+        <img src="<?= htmlspecialchars(BASE_URL) ?>/logo-v2.png" alt="Logo" class="logo">
         <h2>Sign In</h2>
         <?php if ($error): ?>
             <div class="error"><?= htmlspecialchars($error) ?></div>

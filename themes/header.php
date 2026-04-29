@@ -71,8 +71,13 @@
         .preset-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
         .preset-chip { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--border); cursor: pointer; padding: 0; position: relative; overflow: hidden; }
         .preset-chip:hover { border-color: var(--accent); transform: scale(1.08); }
-        .preview-card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 16px; text-align: center; }
-        .preview-card img { width: 240px; height: 240px; display: block; margin: 0 auto; }
+        .preview-card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 14px; text-align: center; }
+        .preview-card .qr-canvas { width: 200px; height: 200px; display: block; margin: 0 auto; position: relative; }
+        .preview-card .qr-canvas svg { width: 100%; height: 100%; display: block; }
+        .qr-spinner { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.85); border-radius: 8px; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+        .qr-spinner.on { opacity: 1; }
+        .qr-spinner::after { content: ''; width: 28px; height: 28px; border: 3px solid #dde2e8; border-top-color: var(--accent); border-radius: 50%; animation: qrspin 0.7s linear infinite; }
+        @keyframes qrspin { to { transform: rotate(360deg); } }
         .dl-row { display: flex; gap: 6px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
         .swatch-pair { display: flex; align-items: center; gap: 8px; }
         .swatch-hex { font-family: monospace; font-size: 0.78rem; color: var(--muted); }
@@ -103,10 +108,13 @@
 <div class="container">
     <header>
         <div class="header-brand">
-            <div>
-                <h1>Umoor Iqtesadiyah QR Track</h1>
-                <small style="color: var(--muted);">Generate &amp; Track QR Codes Easily!</small>
-            </div>
+            <a href="<?= htmlspecialchars(BASE_URL) ?>" style="text-decoration:none; display:flex; align-items:center; gap:15px; color:inherit;">
+                <img src="<?= htmlspecialchars(BASE_URL) ?>/logo-v2.png" alt="Logo" class="logo-img">
+                <div>
+                    <h1>Umoor Iqtesadiyah QR Track</h1>
+                    <small style="color: var(--muted);">Generate &amp; Track QR Codes Easily!</small>
+                </div>
+            </a>
         </div>
 
         <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; align-items:center;">

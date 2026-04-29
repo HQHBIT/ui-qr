@@ -472,7 +472,9 @@ include THEME_PATH . '/header.php';
 
         <div class="designer-grid">
             <div class="preview-card">
-                <img id="qrImage" src="" alt="QR Code">
+                <div class="qr-canvas" id="qrCanvas">
+                    <div class="qr-spinner" id="qrSpinner"></div>
+                </div>
                 <div class="dl-row">
                     <a id="dlPng" href="#" download class="btn btn-sm">PNG</a>
                     <a id="dlJpg" href="#" download class="btn btn-sm">JPG</a>
@@ -753,24 +755,233 @@ function buildDesignQS(d) {
     return p.toString();
 }
 
+// Cached matrix (size, cells, hasLogo) keyed by uuid
+const MATRIX_CACHE = {};
+
+async function loadMatrix(uuid) {
+    if (MATRIX_CACHE[uuid]) return MATRIX_CACHE[uuid];
+    setSpinner(true);
+    try {
+        const res = await fetch('generate_image.php?id=' + encodeURIComponent(uuid) + '&format=json');
+        if (!res.ok) throw new Error('fetch matrix failed');
+        const j = await res.json();
+        MATRIX_CACHE[uuid] = j;
+        return j;
+    } finally {
+        setSpinner(false);
+    }
+}
+
+function setSpinner(on) {
+    const sp = document.getElementById('qrSpinner');
+    if (sp) sp.classList.toggle('on', !!on);
+}
+
+// ── Client-side SVG renderer (mirrors PHP) ───────────────────────────────────
+const SCALE = 14;
+const QZ    = 4;
+
+function moduleShapeSvg(shape, x, y, s, cx, cy) {
+    switch (shape) {
+        case 'dot':     return '<circle cx="'+cx+'" cy="'+cy+'" r="'+(s*0.46)+'"/>';
+        case 'rounded': return '<rect x="'+x+'" y="'+y+'" width="'+s+'" height="'+s+'" rx="'+(s*0.4)+'"/>';
+        case 'classy': {
+            const r = s * 0.45;
+            return '<path d="M'+(x+r)+' '+y+' L'+(x+s)+' '+y+' L'+(x+s)+' '+(y+s-r)+' A'+r+' '+r+' 0 0 1 '+(x+s-r)+' '+(y+s)+' L'+x+' '+(y+s)+' L'+x+' '+(y+r)+' A'+r+' '+r+' 0 0 1 '+(x+r)+' '+y+' Z"/>';
+        }
+        case 'diamond': return '<path d="M'+cx+' '+(y+0.5)+' L'+(x+s-0.5)+' '+cy+' L'+cx+' '+(y+s-0.5)+' L'+(x+0.5)+' '+cy+' z"/>';
+        case 'star': {
+            const r1 = s*0.5, r2 = s*0.22;
+            let pts = '';
+            for (let i = 0; i < 10; i++) {
+                const r = i % 2 === 0 ? r1 : r2;
+                const a = -Math.PI/2 + i * Math.PI/5;
+                pts += (i ? ' ' : '') + (cx + r*Math.cos(a)).toFixed(2) + ',' + (cy + r*Math.sin(a)).toFixed(2);
+            }
+            return '<polygon points="'+pts+'"/>';
+        }
+        case 'cross': {
+            const t = s*0.36, e = (s-t)/2;
+            return '<path d="M'+(cx-t/2)+' '+(y+0.5)+' h'+t+' v'+e+' h'+e+' v'+t+' h-'+e+' v'+e+' h-'+t+' v-'+e+' h-'+e+' v-'+t+' h'+e+' z"/>';
+        }
+        default: return '<rect x="'+x+'" y="'+y+'" width="'+s+'" height="'+s+'"/>';
+    }
+}
+
+function roundedRectPath(x, y, w, h, r) {
+    r = Math.min(r, w/2, h/2);
+    return 'M'+(x+r)+' '+y
+        +' h'+(w-2*r)
+        +' a'+r+' '+r+' 0 0 1 '+r+' '+r
+        +' v'+(h-2*r)
+        +' a'+r+' '+r+' 0 0 1 -'+r+' '+r
+        +' h-'+(w-2*r)
+        +' a'+r+' '+r+' 0 0 1 -'+r+' -'+r
+        +' v-'+(h-2*r)
+        +' a'+r+' '+r+' 0 0 1 '+r+' -'+r+' Z ';
+}
+
+function leafRectPath(x, y, w, h, r) {
+    r = Math.min(r, w/2, h/2);
+    return 'M'+(x+r)+' '+y
+        +' L'+(x+w)+' '+y
+        +' L'+(x+w)+' '+(y+h-r)
+        +' A'+r+' '+r+' 0 0 1 '+(x+w-r)+' '+(y+h)
+        +' L'+x+' '+(y+h)
+        +' L'+x+' '+(y+r)
+        +' A'+r+' '+r+' 0 0 1 '+(x+r)+' '+y+' Z ';
+}
+
+function eyeOuterPath(shape, x, y, s, color) {
+    const outer = 7*s, ix = x+s, iy = y+s, iw = 5*s;
+    const cx = x+outer/2, cy = y+outer/2;
+    const or = outer/2, ir = (5*s)/2;
+
+    if (shape === 'circle') {
+        return '<path fill-rule="evenodd" fill="'+color+'" d="'
+            +'M'+(cx-or)+' '+cy+' a'+or+' '+or+' 0 1 0 '+(2*or)+' 0 a'+or+' '+or+' 0 1 0 -'+(2*or)+' 0 Z'
+            +' M'+(cx-ir)+' '+cy+' a'+ir+' '+ir+' 0 1 1 '+(2*ir)+' 0 a'+ir+' '+ir+' 0 1 1 -'+(2*ir)+' 0 Z"/>';
+    }
+    if (shape === 'rounded') {
+        return '<path fill-rule="evenodd" fill="'+color+'" d="'
+            + roundedRectPath(x, y, outer, outer, s*1.6)
+            + roundedRectPath(ix, iy, iw, iw, s*1.0)
+            +'"/>';
+    }
+    if (shape === 'leaf') {
+        return '<path fill-rule="evenodd" fill="'+color+'" d="'
+            + leafRectPath(x, y, outer, outer, s*1.8)
+            + leafRectPath(ix, iy, iw, iw, s*1.0)
+            +'"/>';
+    }
+    if (shape === 'flower') {
+        return '<path fill-rule="evenodd" fill="'+color+'" d="'
+            + roundedRectPath(x, y, outer, outer, s*2.4)
+            + roundedRectPath(ix, iy, iw, iw, s*1.6)
+            +'"/>';
+    }
+    // square / frame
+    return '<path fill-rule="evenodd" fill="'+color+'" d="'
+        +'M'+x+' '+y+' h'+outer+' v'+outer+' h-'+outer+' Z '
+        +'M'+ix+' '+iy+' v'+iw+' h'+iw+' v-'+iw+' Z"/>';
+}
+
+function eyeInnerShape(shape, x, y, s, color) {
+    const iw = 3*s, ix = x+2*s, iy = y+2*s;
+    const cx = ix + iw/2, cy = iy + iw/2;
+    if (shape === 'circle')  return '<circle cx="'+cx+'" cy="'+cy+'" r="'+(iw/2)+'" fill="'+color+'"/>';
+    if (shape === 'dot')     return '<circle cx="'+cx+'" cy="'+cy+'" r="'+(iw*0.42)+'" fill="'+color+'"/>';
+    if (shape === 'rounded') return '<rect x="'+ix+'" y="'+iy+'" width="'+iw+'" height="'+iw+'" rx="'+(s*0.7)+'" fill="'+color+'"/>';
+    if (shape === 'diamond') return '<path fill="'+color+'" d="M'+cx+' '+iy+' L'+(ix+iw)+' '+cy+' L'+cx+' '+(iy+iw)+' L'+ix+' '+cy+' Z"/>';
+    return '<rect x="'+ix+'" y="'+iy+'" width="'+iw+'" height="'+iw+'" fill="'+color+'"/>';
+}
+
+function renderClientSvg(matrix, d) {
+    const size = matrix.size;
+    const cells = matrix.cells;
+    const hasLogo = !!matrix.hasLogo;
+    const logoData = matrix.logo || null;
+    const total = size + 2 * QZ;
+    const px = total * SCALE;
+    const offset = QZ * SCALE;
+    const qrPx = size * SCALE;
+
+    const fillData = d.gradient ? 'url(#qrg)' : d.fg;
+    let defs = '';
+    if (d.gradient) {
+        if (d.gradient_dir === 'radial') {
+            defs = '<radialGradient id="qrg" gradientUnits="userSpaceOnUse" cx="'+(qrPx/2)+'" cy="'+(qrPx/2)+'" r="'+(qrPx*0.7)+'">'
+                 + '<stop offset="0%" stop-color="'+d.fg+'"/>'
+                 + '<stop offset="100%" stop-color="'+d.fg2+'"/></radialGradient>';
+        } else {
+            const m = { horizontal:[0,0,qrPx,0], vertical:[0,0,0,qrPx], diagonal:[0,0,qrPx,qrPx] };
+            const c = m[d.gradient_dir] || m.diagonal;
+            defs = '<linearGradient id="qrg" gradientUnits="userSpaceOnUse" x1="'+c[0]+'" y1="'+c[1]+'" x2="'+c[2]+'" y2="'+c[3]+'">'
+                 + '<stop offset="0%" stop-color="'+d.fg+'"/>'
+                 + '<stop offset="100%" stop-color="'+d.fg2+'"/></linearGradient>';
+        }
+    }
+
+    const eyes = [[0,0],[size-7,0],[0,size-7]];
+    const isInEye = (x, y) => eyes.some(([ex,ey]) => x>=ex && x<ex+7 && y>=ey && y<ey+7);
+
+    let logoCells = 0;
+    if (hasLogo) {
+        logoCells = Math.round(size * 0.22);
+        if (logoCells % 2 === 0) logoCells++;
+    }
+    const logoCx = size/2, logoCy = size/2;
+    const logoR  = logoCells/2 + 0.5;
+
+    let modules = '';
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (!cells[y][x]) continue;
+            if (isInEye(x, y)) continue;
+            if (logoCells > 0) {
+                const dx = x + 0.5 - logoCx;
+                const dy = y + 0.5 - logoCy;
+                if (dx*dx + dy*dy <= logoR*logoR) continue;
+            }
+            const px_x = x * SCALE, px_y = y * SCALE;
+            const cx = px_x + SCALE/2, cy = px_y + SCALE/2;
+            modules += moduleShapeSvg(d.module_shape, px_x, px_y, SCALE, cx, cy);
+        }
+    }
+
+    let eyeSvg = '';
+    for (const [ex, ey] of eyes) {
+        eyeSvg += eyeOuterPath(d.eye_shape, ex*SCALE, ey*SCALE, SCALE, d.eye_color)
+               +  eyeInnerShape(d.eye_inner, ex*SCALE, ey*SCALE, SCALE, d.eye_color);
+    }
+
+    let logoSvg = '';
+    if (hasLogo && logoData) {
+        const lw = Math.round(logoCells * SCALE * 0.85);
+        const cxAbs = logoCx * SCALE;
+        const cyAbs = logoCy * SCALE;
+        const lx = Math.round(cxAbs - lw/2);
+        const ly = Math.round(cyAbs - lw/2);
+        const pad = Math.round(SCALE * 0.4);
+        logoSvg = '<rect x="'+(lx-pad)+'" y="'+(ly-pad)+'" width="'+(lw+2*pad)+'" height="'+(lw+2*pad)+'" rx="'+(SCALE*0.6)+'" fill="'+d.bg+'"/>'
+                + '<image x="'+lx+'" y="'+ly+'" width="'+lw+'" height="'+lw+'" href="'+logoData+'" preserveAspectRatio="xMidYMid meet"/>';
+    }
+
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+px+' '+px+'" shape-rendering="geometricPrecision">'
+        + '<defs>'+defs+'</defs>'
+        + '<rect width="100%" height="100%" fill="'+d.bg+'"/>'
+        + '<g transform="translate('+offset+','+offset+')">'
+        +   '<g fill="'+fillData+'">'+modules+'</g>'
+        +   eyeSvg
+        +   logoSvg
+        + '</g>'
+        + '</svg>';
+}
+
 let previewTimer = null;
 function refreshPreview() {
     if (!DESIGNER_STATE.uuid) return;
     syncGradientEnable();
-    clearTimeout(previewTimer);
-    previewTimer = setTimeout(() => {
-        const d = readDesigner();
-        const qs = buildDesignQS(d);
-        const base = 'generate_image.php?id=' + encodeURIComponent(DESIGNER_STATE.uuid) + '&' + qs + '&_t=' + Date.now();
-        document.getElementById('qrImage').src    = base + '&format=svg';
-        document.getElementById('dlPng').href     = base + '&format=png';
-        document.getElementById('dlJpg').href     = base + '&format=jpg';
-        document.getElementById('dlSvg').href     = base + '&format=svg';
-        const fname = DESIGNER_STATE.title || 'QR';
-        document.getElementById('dlPng').setAttribute('download', fname + '-QR.png');
-        document.getElementById('dlJpg').setAttribute('download', fname + '-QR.jpg');
-        document.getElementById('dlSvg').setAttribute('download', fname + '-QR.svg');
-    }, 120);
+    const d = readDesigner();
+
+    // Update download links immediately
+    const qs = buildDesignQS(d);
+    const base = 'generate_image.php?id=' + encodeURIComponent(DESIGNER_STATE.uuid) + '&' + qs + '&_t=' + Date.now();
+    document.getElementById('dlPng').href = base + '&format=png';
+    document.getElementById('dlJpg').href = base + '&format=jpg';
+    document.getElementById('dlSvg').href = base + '&format=svg';
+    const fname = DESIGNER_STATE.title || 'QR';
+    document.getElementById('dlPng').setAttribute('download', fname + '-QR.png');
+    document.getElementById('dlJpg').setAttribute('download', fname + '-QR.jpg');
+    document.getElementById('dlSvg').setAttribute('download', fname + '-QR.svg');
+
+    // Render SVG client-side (instant)
+    const m = MATRIX_CACHE[DESIGNER_STATE.uuid];
+    if (!m) return; // matrix still loading
+    const canvas = document.getElementById('qrCanvas');
+    const spinner = canvas.querySelector('.qr-spinner');
+    canvas.innerHTML = renderClientSvg(m, d);
+    if (spinner) canvas.appendChild(spinner);
 }
 
 ['dFg','dBg','dFg2','dEyeColor','dModule','dEye','dEyeInner','dGradient','dGradDir'].forEach(id => {
@@ -807,8 +1018,12 @@ function showQR(uuid, title, id, design) {
     document.getElementById('qrTitle').innerText = title + ' — Designer';
     buildPresetChips();
     applyDesignerInputs(design);
-    refreshPreview();
     openModal('qrModal');
+    // Async load matrix; render once arrived. Inputs work instantly afterwards.
+    loadMatrix(uuid).then(() => refreshPreview()).catch(err => {
+        console.error(err);
+        document.getElementById('qrCanvas').innerHTML = '<div style="color:#dc3545; padding:20px; font-size:0.85em;">Failed to load QR matrix</div>';
+    });
 }
 
 // ── Scan stats ───────────────────────────────────────────────────────────────
