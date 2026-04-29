@@ -54,6 +54,27 @@ if ($authKey === null || !hash_equals(API_KEY, $authKey)) {
     exit;
 }
 
+// Resolve API caller identity. Optional X-User header binds creates to a user;
+// default = first admin (bootstrapped from ADMIN_USER).
+$apiUserHeader = trim($headers['X-User'] ?? '');
+if ($apiUserHeader !== '') {
+    $u = $db->prepare("SELECT id, role FROM users WHERE username = ?");
+    $u->execute([$apiUserHeader]);
+    $API_USER = $u->fetch();
+    if (!$API_USER) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Unauthorized: Unknown X-User']);
+        exit;
+    }
+} else {
+    $API_USER = $db->query("SELECT id, role FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1")->fetch();
+    if (!$API_USER) {
+        http_response_code(503);
+        echo json_encode(['error' => 'No admin user configured']);
+        exit;
+    }
+}
+
 // --- CLEANUP ---
 purge_old_tokens($db);
 
@@ -61,9 +82,9 @@ purge_old_tokens($db);
 $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'POST') {
-    handleCreate($db);
+    handleCreate($db, $API_USER);
 } elseif ($method === 'GET') {
-    handleGet($db);
+    handleGet($db, $API_USER);
 } else {
     http_response_code(405);
     echo json_encode(['error' => 'Method Not Allowed']);
@@ -86,13 +107,19 @@ function getOrCreateImageToken($db, $uuid) {
     return $token;
 }
 
-function handleGet($db) {
-    $uuid = isset($_GET['uuid']) ? trim($_GET['uuid']) : '';
+function handleGet($db, $apiUser) {
+    $uuid    = isset($_GET['uuid']) ? trim($_GET['uuid']) : '';
+    $isAdmin = ($apiUser['role'] ?? '') === 'admin';
 
     // SINGLE GET — uuid must be a non-empty string
     if ($uuid !== '') {
-        $stmt = $db->prepare("SELECT p.*, (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count FROM products p WHERE uuid = ? AND is_deleted = 0");
-        $stmt->execute([$uuid]);
+        if ($isAdmin) {
+            $stmt = $db->prepare("SELECT p.*, (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count FROM products p WHERE uuid = ? AND is_deleted = 0");
+            $stmt->execute([$uuid]);
+        } else {
+            $stmt = $db->prepare("SELECT p.*, (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count FROM products p WHERE uuid = ? AND is_deleted = 0 AND user_id = ?");
+            $stmt->execute([$uuid, $apiUser['id']]);
+        }
         $data = $stmt->fetch();
 
         if (!$data) {
@@ -104,8 +131,13 @@ function handleGet($db) {
         return;
     }
 
-    // LIST ALL — no uuid provided
-    $stmt = $db->query("SELECT p.*, (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count FROM products p WHERE is_deleted = 0 ORDER BY created_at DESC");
+    // LIST — admin sees all, user sees own
+    if ($isAdmin) {
+        $stmt = $db->query("SELECT p.*, (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count FROM products p WHERE is_deleted = 0 ORDER BY created_at DESC");
+    } else {
+        $stmt = $db->prepare("SELECT p.*, (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count FROM products p WHERE is_deleted = 0 AND user_id = ? ORDER BY created_at DESC");
+        $stmt->execute([$apiUser['id']]);
+    }
     $rows = $stmt->fetchAll();
 
     $output = [];
@@ -116,7 +148,7 @@ function handleGet($db) {
     echo json_encode(['status' => 'success', 'count' => count($output), 'data' => $output]);
 }
 
-function handleCreate($db) {
+function handleCreate($db, $apiUser) {
     $input = json_decode(file_get_contents('php://input'), true);
 
     if (!$input || !isset($input['title']) || !isset($input['type'])) {
@@ -178,8 +210,8 @@ function handleCreate($db) {
     }
 
     try {
-        $stmt = $db->prepare("INSERT INTO products (uuid, title, type, target_data) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$uuid, $title, $type, $target]);
+        $stmt = $db->prepare("INSERT INTO products (uuid, title, type, target_data, user_id) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$uuid, $title, $type, $target, $apiUser['id']]);
 
         $token = getOrCreateImageToken($db, $uuid);
 

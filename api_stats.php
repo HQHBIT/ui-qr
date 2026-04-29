@@ -8,6 +8,16 @@ header('X-Robots-Tag: noindex, nofollow');
 $uuid = $_GET['uuid'] ?? '';
 if (!$uuid) { echo json_encode([]); exit; }
 
+// Ownership: non-admins can only see scans for their own QR
+$me = current_user();
+$own = $db->prepare("SELECT user_id FROM products WHERE uuid = ?");
+$own->execute([$uuid]);
+$ownerRow = $own->fetch();
+if (!$ownerRow) { http_response_code(404); echo json_encode([]); exit; }
+if (($me['role'] ?? '') !== 'admin' && (int)$ownerRow['user_id'] !== (int)$me['id']) {
+    http_response_code(403); echo json_encode(['error' => 'Forbidden']); exit;
+}
+
 // Fetch Scans including the new cached columns
 $stmt = $db->prepare("SELECT id, ip_address, user_agent, scanned_at, scan_status, geo_city, geo_region, geo_country, geo_isp FROM scans WHERE product_uuid = ? ORDER BY scanned_at DESC");
 $stmt->execute([$uuid]);

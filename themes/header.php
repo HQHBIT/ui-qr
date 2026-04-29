@@ -4,12 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
-    <title><?= defined('PAGE_TITLE') ? htmlspecialchars(PAGE_TITLE) : 'Tuxxin QR Track' ?></title>
-    <link rel="icon" type="image/png" href="<?= htmlspecialchars(BASE_URL) ?>/tuxxin-qr-track.png">
+    <title><?= defined('PAGE_TITLE') ? htmlspecialchars(PAGE_TITLE) : 'Umoor Iqtesadiyah QR Track' ?></title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Recursive:wght@300..900&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: #121212; --card: #1e1e1e; --text: #e0e0e0; --accent: #ff6600; --border: #333; --danger: #ff4444; --info: #007bff; }
+        :root { --bg: #f5f7fa; --card: #ffffff; --text: #1a1a1a; --accent: #1e90ff; --border: #dde2e8; --danger: #dc3545; --info: #17a2b8; --muted: #6c757d; }
         body { font-family: 'Recursive', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
 
         .container { max-width: 1000px; margin: 0 auto; }
@@ -18,7 +17,7 @@
         header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; border-bottom: 1px solid var(--border); padding-bottom: 20px; }
         .header-brand { display: flex; align-items: center; gap: 15px; }
         .logo-img { height: 50px; width: auto; }
-        h1 { margin: 0; font-weight: 800; background: linear-gradient(45deg, #ff6600, #ff9e42); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        h1 { margin: 0; font-weight: 800; background: linear-gradient(45deg, #1e90ff, #66b2ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 
         /* UI Elements */
         .btn { background: var(--accent); color: #fff; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: 600; text-decoration: none; display: inline-block; }
@@ -26,7 +25,7 @@
         .btn-sm { padding: 5px 10px; font-size: 0.8rem; }
         .btn-danger { background: var(--danger); }
         .btn-info   { background: var(--info); }
-        .btn-logout { background: #444; }
+        .btn-logout { background: var(--muted); }
 
         /* Compact Grid */
         .qr-list { display: grid; gap: 8px; }
@@ -40,33 +39,35 @@
             border: 1px solid var(--border);
             transition: transform 0.2s;
         }
-        .qr-item:hover { transform: translateY(-1px); border-color: var(--accent); }
+        .qr-item { box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+        .qr-item:hover { transform: translateY(-1px); border-color: var(--accent); box-shadow: 0 2px 8px rgba(30,144,255,0.12); }
         .qr-info h3 { margin: 0; font-size: 1.05rem; }
-        .qr-meta { font-size: 0.8rem; color: #888; margin-top: 2px; }
+        .qr-meta { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
         .qr-stats { font-weight: bold; color: var(--accent); cursor: pointer; text-decoration: underline; margin-right: 15px; }
 
         /* Modals */
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 100; align-items: center; justify-content: center; }
-        .modal-content { background: var(--card); padding: 30px; border-radius: 10px; width: 90%; max-width: 600px; position: relative; max-height: 90vh; overflow-y: auto; border: 1px solid var(--border); }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.45); z-index: 100; align-items: center; justify-content: center; }
+        .modal-content { background: var(--card); padding: 30px; border-radius: 10px; width: 90%; max-width: 600px; position: relative; max-height: 90vh; overflow-y: auto; border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,0.15); }
 
         /* SVG Close Icon */
-        .close-icon { position: absolute; top: 15px; right: 20px; cursor: pointer; fill: #fff; width: 24px; height: 24px; opacity: 0.7; transition: opacity 0.2s; }
+        .close-icon { position: absolute; top: 15px; right: 20px; cursor: pointer; fill: #333; width: 24px; height: 24px; opacity: 0.6; transition: opacity 0.2s; }
         .close-icon:hover { opacity: 1; }
 
         /* Inputs */
-        input, select, textarea { width: 100%; padding: 12px; margin: 8px 0 20px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; font-family: inherit; }
+        input, select, textarea { width: 100%; padding: 12px; margin: 8px 0 20px; background: #ffffff; border: 1px solid var(--border); color: var(--text); border-radius: 4px; box-sizing: border-box; font-family: inherit; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(30,144,255,0.15); }
 
         /* Toggle Switch */
         .switch { position: relative; display: inline-block; width: 40px; height: 20px; margin: 0 15px; }
         .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #444; transition: .4s; border-radius: 20px; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cfd6dd; transition: .4s; border-radius: 20px; }
         .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
         input:checked + .slider { background-color: var(--accent); }
         input:checked + .slider:before { transform: translateX(20px); }
 
         /* Scan Stats */
-        .scan-row { border-bottom: 1px solid #333; padding: 12px 0; font-size: 0.9rem; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .scan-meta { color: #888; font-size: 0.8rem; grid-column: 1 / -1; }
+        .scan-row { border-bottom: 1px solid var(--border); padding: 12px 0; font-size: 0.9rem; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .scan-meta { color: var(--muted); font-size: 0.8rem; grid-column: 1 / -1; }
         .scan-badge { display: inline-block; background: var(--danger); color: #fff; font-size: 0.7em; font-weight: bold; padding: 2px 6px; border-radius: 3px; margin-top: 4px; }
 
         @media (min-width: 600px) {
@@ -81,18 +82,29 @@
 <div class="container">
     <header>
         <div class="header-brand">
-            <img src="<?= htmlspecialchars(BASE_URL) ?>/logo-v2.png" alt="Tuxxin QR Track Logo" class="logo-img">
             <div>
-                <h1>Tuxxin QR Track</h1>
-                <small style="color: #666;">Generate &amp; Track QR Codes Easily!</small>
+                <h1>Umoor Iqtesadiyah QR Track</h1>
+                <small style="color: var(--muted);">Generate &amp; Track QR Codes Easily!</small>
             </div>
         </div>
 
-        <?php if(defined('SHOW_ADD_BTN')): ?>
-        <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
-            <a href="<?= htmlspecialchars(BASE_URL) ?>/api_instructions.php" class="btn btn-info btn-sm">API</a>
-            <button class="btn btn-sm" onclick="openModal('addModal')">+ New QR Code</button>
-            <a href="<?= htmlspecialchars(BASE_URL) ?>/logout.php" class="btn btn-logout btn-sm">Logout</a>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; align-items:center;">
+            <?php $hdrUser = function_exists('current_user') ? current_user() : null; ?>
+            <?php if ($hdrUser): ?>
+                <span style="color:var(--muted); font-size:0.85em;">
+                    <?= htmlspecialchars($hdrUser['username']) ?>
+                    <span style="padding:1px 6px; border-radius:8px; background:<?= $hdrUser['role']==='admin' ? '#1e90ff' : '#6c757d' ?>; color:#fff; font-size:0.75em; margin-left:4px;"><?= strtoupper($hdrUser['role']) ?></span>
+                </span>
+                <?php if ($hdrUser['role'] === 'admin'): ?>
+                    <a href="<?= htmlspecialchars(BASE_URL) ?>/users.php" class="btn btn-sm" style="background:#6c757d;">Users</a>
+                <?php endif; ?>
+            <?php endif; ?>
+            <?php if(defined('SHOW_ADD_BTN')): ?>
+                <a href="<?= htmlspecialchars(BASE_URL) ?>/api_instructions.php" class="btn btn-info btn-sm">API</a>
+                <button class="btn btn-sm" onclick="openModal('addModal')">+ New QR Code</button>
+            <?php endif; ?>
+            <?php if ($hdrUser): ?>
+                <a href="<?= htmlspecialchars(BASE_URL) ?>/logout.php" class="btn btn-logout btn-sm">Logout</a>
+            <?php endif; ?>
         </div>
-        <?php endif; ?>
     </header>

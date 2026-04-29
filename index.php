@@ -2,9 +2,40 @@
 require 'config.php';
 require_auth();
 
-define('PAGE_TITLE', 'Dashboard | Tuxxin QR Track');
+define('PAGE_TITLE', 'Dashboard | Umoor Iqtesadiyah QR Track');
 
 const ALLOWED_TYPES = ['url', 'phone', 'map', 'vcard', 'wifi', 'sms', 'email', 'social'];
+
+$me      = current_user();
+$isAdmin = is_admin();
+
+function sanitize_design(array $in): array {
+    $hex = function ($v, $default) {
+        return preg_match('/^#[0-9a-fA-F]{6}$/', (string)$v) ? strtolower($v) : $default;
+    };
+    $allowedModule = ['square','dot','rounded','classy','diamond'];
+    $allowedEye    = ['square','rounded','circle','leaf'];
+    return [
+        'fg'           => $hex($in['fg']           ?? '#000000', '#000000'),
+        'bg'           => $hex($in['bg']           ?? '#ffffff', '#ffffff'),
+        'gradient'     => !empty($in['gradient']),
+        'fg2'          => $hex($in['fg2']          ?? '#1e90ff', '#1e90ff'),
+        'module_shape' => in_array($in['module_shape'] ?? 'square', $allowedModule, true) ? $in['module_shape'] : 'square',
+        'eye_shape'    => in_array($in['eye_shape']    ?? 'square', $allowedEye,    true) ? $in['eye_shape']    : 'square',
+        'eye_color'    => $hex($in['eye_color']    ?? '#000000', '#000000'),
+    ];
+}
+
+function ensure_owner_or_admin($db, int $id, ?array $me): array {
+    $stmt = $db->prepare("SELECT * FROM products WHERE id = ? LIMIT 1");
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    if (!$row) { http_response_code(404); die('Not found.'); }
+    if (($me['role'] ?? '') !== 'admin' && (int)$row['user_id'] !== (int)($me['id'] ?? 0)) {
+        http_response_code(403); die('Forbidden.');
+    }
+    return $row;
+}
 
 // --- HANDLE FORM SUBMISSIONS & ACTIONS ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -75,8 +106,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
         }
 
-        $stmt = $db->prepare("INSERT INTO products (uuid, title, type, target_data, logo_path) VALUES (?, ?, ?, ?, ?)");
-        $stmt->execute([$uuid, $title, $type, $target, $logoPath]);
+        $design = sanitize_design($_POST['design'] ?? []);
+        $designJson = json_encode($design);
+
+        $stmt = $db->prepare("INSERT INTO products (uuid, title, type, target_data, logo_path, user_id, design_json) VALUES (?, ?, ?, ?, ?, ?, ?)");
+        $stmt->execute([$uuid, $title, $type, $target, $logoPath, $me['id'], $designJson]);
 
         header("Location: " . BASE_URL);
         exit;
@@ -92,12 +126,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             die('Invalid input.');
         }
 
-        // Fetch current type so we know how to rebuild target_data
-        $row = $db->prepare("SELECT type FROM products WHERE id = ? AND is_deleted = 0");
-        $row->execute([$id]);
-        $current = $row->fetch();
-        if (!$current) { http_response_code(404); die('Not found.'); }
-
+        $current = ensure_owner_or_admin($db, $id, $me);
+        if ($current['is_deleted']) { http_response_code(404); die('Not found.'); }
         $type = $current['type'];
         $target = '';
         if ($type === 'vcard') {
@@ -129,8 +159,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $target = trim($_POST['target'] ?? '');
         }
 
-        $stmt = $db->prepare("UPDATE products SET title = ?, target_data = ? WHERE id = ? AND is_deleted = 0");
-        $stmt->execute([$title, $target, $id]);
+        $design = sanitize_design($_POST['design'] ?? json_decode($current['design_json'] ?? '[]', true) ?: []);
+        $designJson = json_encode($design);
+
+        $stmt = $db->prepare("UPDATE products SET title = ?, target_data = ?, design_json = ? WHERE id = ? AND is_deleted = 0");
+        $stmt->execute([$title, $target, $designJson, $id]);
 
         header("Location: " . BASE_URL);
         exit;
@@ -138,45 +171,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     // Action: Toggle Active Status
     if ($_POST['action'] === 'toggle') {
-        $stmt = $db->prepare("UPDATE products SET is_active = NOT is_active WHERE id = ?");
-        $stmt->execute([(int)($_POST['id'] ?? 0)]);
+        $id = (int)($_POST['id'] ?? 0);
+        ensure_owner_or_admin($db, $id, $me);
+        $db->prepare("UPDATE products SET is_active = NOT is_active WHERE id = ?")->execute([$id]);
         exit;
     }
 
     // Action: Soft Delete
     if ($_POST['action'] === 'delete') {
-        $stmt = $db->prepare("UPDATE products SET is_active = 0, is_deleted = 1 WHERE id = ?");
-        $stmt->execute([(int)($_POST['id'] ?? 0)]);
+        $id = (int)($_POST['id'] ?? 0);
+        ensure_owner_or_admin($db, $id, $me);
+        $db->prepare("UPDATE products SET is_active = 0, is_deleted = 1 WHERE id = ?")->execute([$id]);
         exit;
     }
 
     // Action: Restore Deleted
     if ($_POST['action'] === 'restore') {
-        $stmt = $db->prepare("UPDATE products SET is_deleted = 0, is_active = 1 WHERE id = ?");
-        $stmt->execute([(int)($_POST['id'] ?? 0)]);
+        $id = (int)($_POST['id'] ?? 0);
+        ensure_owner_or_admin($db, $id, $me);
+        $db->prepare("UPDATE products SET is_deleted = 0, is_active = 1 WHERE id = ?")->execute([$id]);
         header("Location: " . BASE_URL);
+        exit;
+    }
+
+    // Action: Update Design (live designer save)
+    if ($_POST['action'] === 'design') {
+        $id = (int)($_POST['id'] ?? 0);
+        ensure_owner_or_admin($db, $id, $me);
+        $design = sanitize_design($_POST['design'] ?? []);
+        $db->prepare("UPDATE products SET design_json = ? WHERE id = ?")
+           ->execute([json_encode($design), $id]);
+        header('Content-Type: application/json');
+        echo json_encode(['status' => 'ok', 'design' => $design]);
         exit;
     }
 }
 
 // --- FETCH DATA ---
 $showTrash = isset($_GET['trash']);
+$deletedFlag = $showTrash ? 1 : 0;
 
-if ($showTrash) {
-    $products = $db->query("
-        SELECT p.*, (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count
+if ($isAdmin) {
+    $stmt = $db->prepare("
+        SELECT p.*, u.username AS owner_username,
+            (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count
         FROM products p
-        WHERE is_deleted = 1
-        ORDER BY created_at DESC
-    ")->fetchAll();
+        LEFT JOIN users u ON u.id = p.user_id
+        WHERE p.is_deleted = ?
+        ORDER BY p.created_at DESC
+    ");
+    $stmt->execute([$deletedFlag]);
 } else {
-    $products = $db->query("
-        SELECT p.*, (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count
+    $stmt = $db->prepare("
+        SELECT p.*, NULL AS owner_username,
+            (SELECT COUNT(*) FROM scans WHERE product_uuid = p.uuid) as scan_count
         FROM products p
-        WHERE is_deleted = 0
-        ORDER BY created_at DESC
-    ")->fetchAll();
+        WHERE p.is_deleted = ? AND p.user_id = ?
+        ORDER BY p.created_at DESC
+    ");
+    $stmt->execute([$deletedFlag, $me['id']]);
 }
+$products = $stmt->fetchAll();
 
 $csrfToken = csrf_token();
 
@@ -187,12 +242,12 @@ include THEME_PATH . '/header.php';
 
 <?php if ($showTrash): ?>
 <div style="margin-bottom:15px; display:flex; align-items:center; gap:15px;">
-    <a href="<?= htmlspecialchars(BASE_URL) ?>" class="btn btn-sm" style="background:#444;">&larr; Back to Dashboard</a>
-    <h2 style="margin:0; color:#ff4444;">Trash</h2>
+    <a href="<?= htmlspecialchars(BASE_URL) ?>" class="btn btn-sm" style="background:#6c757d;">&larr; Back to Dashboard</a>
+    <h2 style="margin:0; color:#dc3545;">Trash</h2>
 </div>
 <?php else: ?>
 <div style="margin-bottom:15px; display:flex; justify-content:flex-end;">
-    <a href="?trash" class="btn btn-sm" style="background:#444;" title="View deleted QR codes">&#128465; Trash</a>
+    <a href="?trash" class="btn btn-sm" style="background:#6c757d;" title="View deleted QR codes">&#128465; Trash</a>
 </div>
 <?php endif; ?>
 
@@ -206,7 +261,7 @@ include THEME_PATH . '/header.php';
     <?php foreach($products as $p): ?>
     <div class="qr-item">
         <div class="qr-info">
-            <h3><?= htmlspecialchars($p['title']) ?> <span style="font-size:0.7em; opacity:0.6">[<?= strtoupper(htmlspecialchars($p['type'])) ?>]</span></h3>
+            <h3><?= htmlspecialchars($p['title']) ?> <span style="font-size:0.7em; opacity:0.6">[<?= strtoupper(htmlspecialchars($p['type'])) ?>]</span><?php if ($isAdmin && !empty($p['owner_username'])): ?> <span style="font-size:0.7em; opacity:0.7; padding:2px 6px; border-radius:8px; background:#eef3ff; color:#1e90ff;"><?= htmlspecialchars($p['owner_username']) ?></span><?php endif; ?></h3>
             <div class="qr-meta">Created: <?= date('M d, Y', strtotime($p['created_at'])) ?></div>
         </div>
 
@@ -231,7 +286,7 @@ include THEME_PATH . '/header.php';
                     <span class="slider"></span>
                 </label>
 
-                <button class="btn btn-sm" onclick="showQR('<?= htmlspecialchars($p['uuid']) ?>', <?= htmlspecialchars(json_encode($p['title']), ENT_QUOTES) ?>)">Get Code</button>
+                <button class="btn btn-sm" onclick='showQR(<?= htmlspecialchars(json_encode($p['uuid']), ENT_QUOTES) ?>, <?= htmlspecialchars(json_encode($p['title']), ENT_QUOTES) ?>, <?= (int)$p['id'] ?>, <?= htmlspecialchars(json_encode(json_decode($p['design_json'] ?? '') ?: new stdClass()), ENT_QUOTES) ?>)'>Design / Get Code</button>
 
                 <button class="btn btn-sm btn-info" onclick='openEditModal(<?= htmlspecialchars(json_encode([
                     'id'          => $p['id'],
@@ -306,7 +361,38 @@ include THEME_PATH . '/header.php';
 
             <label>Embedded Logo (Optional — PNG or JPG only)</label>
             <input type="file" name="logo" accept="image/png, image/jpeg">
-            <button type="submit" class="btn" style="width:100%; margin-top:20px;">Generate QR</button>
+
+            <fieldset style="border:1px solid var(--border); border-radius:6px; padding:12px; margin:10px 0 20px;">
+                <legend style="font-weight:bold; padding:0 6px;">Design</legend>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                    <label style="margin:0;">Foreground<input type="color" name="design[fg]" value="#000000"></label>
+                    <label style="margin:0;">Background<input type="color" name="design[bg]" value="#ffffff"></label>
+                    <label style="margin:0;">Module shape
+                        <select name="design[module_shape]">
+                            <option value="square">Square</option>
+                            <option value="dot">Dots</option>
+                            <option value="rounded">Rounded</option>
+                            <option value="classy">Classy</option>
+                            <option value="diamond">Diamond</option>
+                        </select>
+                    </label>
+                    <label style="margin:0;">Eye shape
+                        <select name="design[eye_shape]">
+                            <option value="square">Square</option>
+                            <option value="rounded">Rounded</option>
+                            <option value="circle">Circle</option>
+                            <option value="leaf">Leaf</option>
+                        </select>
+                    </label>
+                    <label style="margin:0;">Eye color<input type="color" name="design[eye_color]" value="#000000"></label>
+                    <label style="margin:0; display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" name="design[gradient]" value="1" style="width:auto; margin:0;"> Gradient
+                    </label>
+                    <label style="margin:0;">Gradient end<input type="color" name="design[fg2]" value="#1e90ff"></label>
+                </div>
+            </fieldset>
+
+            <button type="submit" class="btn" style="width:100%; margin-top:10px;">Generate QR</button>
         </form>
     </div>
 </div>
@@ -374,16 +460,51 @@ include THEME_PATH . '/header.php';
     </div>
 </div>
 
-<!-- ── QR Code Modal ──────────────────────────────────────────────────────────── -->
+<!-- ── QR Designer Modal ──────────────────────────────────────────────────────── -->
 <div id="qrModal" class="modal">
-    <div class="modal-content" style="text-align: center;">
+    <div class="modal-content" style="max-width:760px;">
         <svg class="close-icon" onclick="closeModal('qrModal')" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        <h2 id="qrTitle">QR Code</h2>
-        <img id="qrImage" src="" style="width: 250px; height: 250px; border: 5px solid white; margin: 20px 0;" alt="QR Code">
-        <div style="display:flex; gap:10px; justify-content:center;">
-            <a id="dlPng" href="#" download class="btn btn-sm">Download PNG</a>
-            <a id="dlJpg" href="#" download class="btn btn-sm">Download JPG</a>
-            <button onclick="printQR()" class="btn btn-sm" style="background: #444;">Print</button>
+        <h2 id="qrTitle">QR Designer</h2>
+        <div style="display:grid; grid-template-columns: 250px 1fr; gap:24px; align-items:start; margin-top:10px;">
+            <div style="text-align:center;">
+                <img id="qrImage" src="" style="width:240px; height:240px; background:#fff; border:1px solid var(--border); border-radius:8px;" alt="QR Code">
+                <div style="display:flex; gap:6px; justify-content:center; margin-top:14px; flex-wrap:wrap;">
+                    <a id="dlPng" href="#" download class="btn btn-sm">PNG</a>
+                    <a id="dlJpg" href="#" download class="btn btn-sm">JPG</a>
+                    <a id="dlSvg" href="#" download class="btn btn-sm">SVG</a>
+                    <button onclick="printQR()" class="btn btn-sm" style="background:#6c757d;">Print</button>
+                </div>
+            </div>
+            <div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <label style="margin:0;">Foreground<input type="color" id="dFg" value="#000000"></label>
+                    <label style="margin:0;">Background<input type="color" id="dBg" value="#ffffff"></label>
+                    <label style="margin:0;">Module shape
+                        <select id="dModule">
+                            <option value="square">Square</option>
+                            <option value="dot">Dots</option>
+                            <option value="rounded">Rounded</option>
+                            <option value="classy">Classy</option>
+                            <option value="diamond">Diamond</option>
+                        </select>
+                    </label>
+                    <label style="margin:0;">Eye shape
+                        <select id="dEye">
+                            <option value="square">Square</option>
+                            <option value="rounded">Rounded</option>
+                            <option value="circle">Circle</option>
+                            <option value="leaf">Leaf</option>
+                        </select>
+                    </label>
+                    <label style="margin:0;">Eye color<input type="color" id="dEyeColor" value="#000000"></label>
+                    <label style="margin:0; display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="dGradient" style="width:auto; margin:0;"> Gradient
+                    </label>
+                    <label style="margin:0;">Gradient end<input type="color" id="dFg2" value="#1e90ff"></label>
+                </div>
+                <button id="dSave" class="btn btn-sm" style="margin-top:14px;">Save Design</button>
+                <span id="dSaveMsg" style="margin-left:10px; color:var(--muted); font-size:0.85em;"></span>
+            </div>
         </div>
     </div>
 </div>
@@ -396,7 +517,7 @@ include THEME_PATH . '/header.php';
         <p>This will move the QR code to Trash. You can restore it later.</p>
         <div style="margin-top: 20px; display:flex; gap:10px; justify-content:center;">
             <button id="confirmDeleteBtn" class="btn btn-danger">Yes, Delete</button>
-            <button onclick="closeModal('deleteModal')" class="btn" style="background: #444;">Cancel</button>
+            <button onclick="closeModal('deleteModal')" class="btn" style="background: #6c757d;">Cancel</button>
         </div>
     </div>
 </div>
@@ -493,15 +614,88 @@ function toggleQR(id, csrf) {
     fetch('index.php', { method: 'POST', body: fd });
 }
 
-// ── Get Code modal ───────────────────────────────────────────────────────────
-function showQR(uuid, title) {
-    const urlBase = 'generate_image.php?id=' + uuid;
-    document.getElementById('qrImage').src        = urlBase + '&format=jpg';
-    document.getElementById('qrTitle').innerText  = title;
-    document.getElementById('dlPng').href         = urlBase + '&format=png';
-    document.getElementById('dlJpg').href         = urlBase + '&format=jpg';
-    document.getElementById('dlPng').setAttribute('download', title + '-QR.png');
-    document.getElementById('dlJpg').setAttribute('download', title + '-QR.jpg');
+// ── Designer modal ───────────────────────────────────────────────────────────
+let DESIGNER_STATE = { uuid: null, id: null, title: '' };
+const DESIGN_DEFAULT = { fg:'#000000', bg:'#ffffff', gradient:false, fg2:'#1e90ff', module_shape:'square', eye_shape:'square', eye_color:'#000000' };
+
+function readDesigner() {
+    return {
+        fg:           document.getElementById('dFg').value,
+        bg:           document.getElementById('dBg').value,
+        gradient:     document.getElementById('dGradient').checked,
+        fg2:          document.getElementById('dFg2').value,
+        module_shape: document.getElementById('dModule').value,
+        eye_shape:    document.getElementById('dEye').value,
+        eye_color:    document.getElementById('dEyeColor').value,
+    };
+}
+
+function applyDesignerInputs(d) {
+    d = Object.assign({}, DESIGN_DEFAULT, d || {});
+    document.getElementById('dFg').value       = d.fg;
+    document.getElementById('dBg').value       = d.bg;
+    document.getElementById('dGradient').checked = !!d.gradient;
+    document.getElementById('dFg2').value      = d.fg2;
+    document.getElementById('dModule').value   = d.module_shape;
+    document.getElementById('dEye').value      = d.eye_shape;
+    document.getElementById('dEyeColor').value = d.eye_color;
+}
+
+function buildDesignQS(d) {
+    const p = new URLSearchParams();
+    p.set('fg', d.fg); p.set('bg', d.bg);
+    p.set('fg2', d.fg2); p.set('eye_color', d.eye_color);
+    p.set('module_shape', d.module_shape); p.set('eye_shape', d.eye_shape);
+    p.set('gradient', d.gradient ? '1' : '0');
+    return p.toString();
+}
+
+let previewTimer = null;
+function refreshPreview() {
+    if (!DESIGNER_STATE.uuid) return;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+        const d = readDesigner();
+        const qs = buildDesignQS(d);
+        const base = 'generate_image.php?id=' + encodeURIComponent(DESIGNER_STATE.uuid) + '&' + qs + '&_t=' + Date.now();
+        document.getElementById('qrImage').src    = base + '&format=svg';
+        document.getElementById('dlPng').href     = base + '&format=png';
+        document.getElementById('dlJpg').href     = base + '&format=jpg';
+        document.getElementById('dlSvg').href     = base + '&format=svg';
+        const fname = DESIGNER_STATE.title || 'QR';
+        document.getElementById('dlPng').setAttribute('download', fname + '-QR.png');
+        document.getElementById('dlJpg').setAttribute('download', fname + '-QR.jpg');
+        document.getElementById('dlSvg').setAttribute('download', fname + '-QR.svg');
+    }, 120);
+}
+
+['dFg','dBg','dFg2','dEyeColor','dModule','dEye','dGradient'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input',  refreshPreview);
+    if (el) el.addEventListener('change', refreshPreview);
+});
+
+document.getElementById('dSave').addEventListener('click', function() {
+    if (!DESIGNER_STATE.id) return;
+    const d = readDesigner();
+    const fd = new FormData();
+    fd.append('action', 'design');
+    fd.append('id', DESIGNER_STATE.id);
+    fd.append('csrf_token', CSRF_TOKEN);
+    Object.entries(d).forEach(([k,v]) => fd.append('design[' + k + ']', typeof v === 'boolean' ? (v ? '1' : '0') : v));
+    const msg = document.getElementById('dSaveMsg');
+    msg.textContent = 'Saving...';
+    fetch('index.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(() => { msg.textContent = 'Saved.'; setTimeout(() => msg.textContent = '', 1800); })
+        .catch(() => { msg.textContent = 'Error'; });
+});
+
+function showQR(uuid, title, id, design) {
+    DESIGNER_STATE = { uuid, id, title };
+    document.getElementById('qrTitle').innerText = title;
+    applyDesignerInputs(design);
+    refreshPreview();
     openModal('qrModal');
 }
 
@@ -523,12 +717,12 @@ function loadStats(uuid) {
                     <div class="scan-row">
                         <div style="padding-right:10px;">
                             <div class="scan-ip">${row.ip_address}</div>
-                            <div style="color:#aaa; font-size:0.85em;">${row.geo.isp || 'Unknown ISP'}</div>
+                            <div style="color:#6c757d; font-size:0.85em;">${row.geo.isp || 'Unknown ISP'}</div>
                             ${badge}
                         </div>
                         <div>
                             <div style="color: var(--accent); font-weight:bold;">${row.geo.city}, ${row.geo.region}</div>
-                            <div style="color:#aaa; font-size:0.85em;">${row.geo.country}</div>
+                            <div style="color:#6c757d; font-size:0.85em;">${row.geo.country}</div>
                         </div>
                         <div class="scan-meta">
                             <div>${row.scanned_at}</div>

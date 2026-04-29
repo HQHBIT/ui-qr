@@ -3,22 +3,22 @@ declare(strict_types=1);
 
 // --- AUTHENTICATION SETTINGS ---
 define('ADMIN_USER', 'admin');
-define('ADMIN_PASS', 'change_me');
+define('ADMIN_PASS', '18ddbf4f606ab5a2');
 
 // --- API SETTINGS ---
 // Generate a secure random key using the generator on the API Docs page, or run:
 // php -r "echo bin2hex(random_bytes(32));"
-define('API_KEY', 'change_me_to_a_random_string');
+define('API_KEY', 'bdbf960e71744f6d7de3477debf7be4541330f54597c9cc84b567ac72c37a067');
 
 // --- SITE SETTINGS ---
 // No trailing slash. Examples:
 //   Root install:      'https://yourdomain.com'
 //   Subdir install:    'https://yourdomain.com/qr-track'
-define('BASE_URL',   'https://yourdomain.com');
+define('BASE_URL',   'http://54.198.213.208:8091');
 
 // Absolute paths — place OUTSIDE your web root for security
-define('DB_PATH',    '/home/youruser/db/tuxxin_qr.sqlite');
-define('LOGO_DIR',   '/home/youruser/tmp');
+define('DB_PATH',    '/home/admin/qr-track-data/db/tuxxin_qr.sqlite');
+define('LOGO_DIR',   '/home/admin/qr-track-data/tmp');
 
 define('TIMEZONE',   'America/New_York');
 define('THEME_PATH', __DIR__ . '/themes');
@@ -63,6 +63,30 @@ function require_auth() {
     }
 }
 
+function current_user(): ?array {
+    if (session_status() === PHP_SESSION_NONE) session_start();
+    if (empty($_SESSION['logged_in']) || empty($_SESSION['user_id'])) return null;
+    return [
+        'id'       => (int)$_SESSION['user_id'],
+        'username' => $_SESSION['username'] ?? '',
+        'role'     => $_SESSION['role'] ?? 'user',
+    ];
+}
+
+function is_admin(): bool {
+    $u = current_user();
+    return $u !== null && $u['role'] === 'admin';
+}
+
+function require_role(string $role): void {
+    require_auth();
+    $u = current_user();
+    if (!$u || $u['role'] !== $role) {
+        http_response_code(403);
+        die('Forbidden: insufficient privileges.');
+    }
+}
+
 function csrf_token(): string {
     if (session_status() === PHP_SESSION_NONE) session_start();
     if (empty($_SESSION['csrf_token'])) {
@@ -96,6 +120,14 @@ try {
     $db->setAttribute(PDO::ATTR_ERRMODE,            PDO::ERRMODE_EXCEPTION);
     $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
+    $db->exec("CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+
     $db->exec("CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         uuid TEXT UNIQUE,
@@ -105,8 +137,29 @@ try {
         logo_path TEXT DEFAULT NULL,
         is_active INTEGER DEFAULT 1,
         is_deleted INTEGER DEFAULT 0,
+        user_id INTEGER DEFAULT NULL,
+        design_json TEXT DEFAULT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )");
+
+    // Migration: add user_id + design_json if missing
+    $pcols = $db->query("PRAGMA table_info(products)")->fetchAll(PDO::FETCH_COLUMN, 1);
+    if (!in_array('user_id', $pcols)) {
+        $db->exec("ALTER TABLE products ADD COLUMN user_id INTEGER DEFAULT NULL");
+    }
+    if (!in_array('design_json', $pcols)) {
+        $db->exec("ALTER TABLE products ADD COLUMN design_json TEXT DEFAULT NULL");
+    }
+
+    // Bootstrap: seed admin from config constants on first run; assign legacy QRs to admin
+    $userCount = (int)$db->query("SELECT COUNT(*) FROM users")->fetchColumn();
+    if ($userCount === 0) {
+        $hash = password_hash(ADMIN_PASS, PASSWORD_DEFAULT);
+        $db->prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')")
+           ->execute([ADMIN_USER, $hash]);
+        $adminId = (int)$db->lastInsertId();
+        $db->prepare("UPDATE products SET user_id = ? WHERE user_id IS NULL")->execute([$adminId]);
+    }
 
     $db->exec("CREATE TABLE IF NOT EXISTS scans (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
