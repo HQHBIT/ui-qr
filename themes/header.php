@@ -96,6 +96,32 @@
         .folder-name { font-weight: 600; font-size: 0.95rem; text-align: center; word-break: break-word; }
         .folder-meta { font-size: 0.75rem; color: var(--muted); }
 
+        /* Stats dashboard */
+        .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 18px; }
+        .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+        .kpi-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+        .kpi-value { font-size: 1.7rem; font-weight: 800; margin-top: 4px; line-height: 1.1; background: linear-gradient(45deg, #1e90ff, #66b2ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .kpi-value-sm { font-size: 0.95rem; font-weight: 700; margin-top: 6px; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+        .card-block { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+        .card-block h3 { margin: 0 0 12px; font-size: 1rem; color: var(--text); }
+
+        .bar-list { display: flex; flex-direction: column; gap: 8px; }
+        .bar-row { display: grid; grid-template-columns: 100px 1fr 90px; align-items: center; gap: 10px; font-size: 0.85rem; }
+        .bar-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .bar-track { background: #eef2f6; height: 10px; border-radius: 5px; overflow: hidden; }
+        .bar-fill { height: 100%; background: linear-gradient(90deg, #1e90ff, #66b2ff); border-radius: 5px; }
+        .bar-count { text-align: right; font-variant-numeric: tabular-nums; }
+
+        .recent-scans { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .recent-scans th { text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--border); color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; position: sticky; top: 0; background: var(--card); }
+        .recent-scans td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        .recent-scans tr:last-child td { border-bottom: none; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; }
+        .badge-ok { background: #d4edda; color: #155724; }
+        .badge-danger { background: #f8d7da; color: #721c24; }
+
         /* Toggle Switch */
         .switch { position: relative; display: inline-block; width: 40px; height: 20px; margin: 0 15px; }
         .switch input { opacity: 0; width: 0; height: 0; }

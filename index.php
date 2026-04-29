@@ -485,7 +485,7 @@ include THEME_PATH . '/header.php';
                 <?php if ($p['type'] === 'wifi'): ?>
                     <div class="qr-stats" style="color: #666; text-decoration: none; cursor: default;">Not Trackable</div>
                 <?php else: ?>
-                    <div onclick="loadStats('<?= htmlspecialchars($p['uuid']) ?>')" class="qr-stats"><?= (int)$p['scan_count'] ?> Scans</div>
+                    <a href="stats.php?uuid=<?= htmlspecialchars($p['uuid']) ?>" class="qr-stats" style="text-decoration:underline;"><?= (int)$p['scan_count'] ?> Scans</a>
                 <?php endif; ?>
 
                 <label class="switch">
@@ -671,14 +671,6 @@ include THEME_PATH . '/header.php';
     </div>
 </div>
 
-<!-- ── Stats Modal ────────────────────────────────────────────────────────────── -->
-<div id="statsModal" class="modal">
-    <div class="modal-content">
-        <svg class="close-icon" onclick="closeModal('statsModal')" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        <h2>Scan History</h2>
-        <div id="statsContent" style="max-height: 400px; overflow-y: auto;">Loading...</div>
-    </div>
-</div>
 
 <!-- ── QR Designer Modal ──────────────────────────────────────────────────────── -->
 <div id="qrModal" class="modal">
@@ -1270,53 +1262,22 @@ function showQR(uuid, title, id, design) {
     DESIGNER_STATE = { uuid, id, title };
     document.getElementById('qrTitle').innerText = title + ' — Designer';
     buildPresetChips();
+    // Fall back to inline design (might be stale); the matrix fetch will overwrite with the authoritative saved design.
     applyDesignerInputs(design);
     openModal('qrModal');
-    // Async load matrix; render once arrived. Inputs work instantly afterwards.
-    loadMatrix(uuid).then(() => refreshPreview()).catch(err => {
-        console.error(err);
-        document.getElementById('qrCanvas').innerHTML = '<div style="color:#dc3545; padding:20px; font-size:0.85em;">Failed to load QR matrix</div>';
-    });
-}
-
-// ── Scan stats ───────────────────────────────────────────────────────────────
-function loadStats(uuid) {
-    openModal('statsModal');
-    document.getElementById('statsContent').innerHTML = '<p style="text-align:center; padding:20px;">Loading geolocation data...</p>';
-    fetch('api_stats.php?uuid=' + encodeURIComponent(uuid))
-        .then(res => res.json())
-        .then(data => {
-            let html = '';
-            if (data.length === 0) {
-                html = '<p>No scans yet.</p>';
-            } else {
-                data.forEach(row => {
-                    const badge = row.scan_status === 'blocked'
-                        ? '<div class="scan-badge">DISABLED SCAN</div>' : '';
-                    html += `
-                    <div class="scan-row">
-                        <div style="padding-right:10px;">
-                            <div class="scan-ip">${row.ip_address}</div>
-                            <div style="color:#6c757d; font-size:0.85em;">${row.geo.isp || 'Unknown ISP'}</div>
-                            ${badge}
-                        </div>
-                        <div>
-                            <div style="color: var(--accent); font-weight:bold;">${row.geo.city}, ${row.geo.region}</div>
-                            <div style="color:#6c757d; font-size:0.85em;">${row.geo.country}</div>
-                        </div>
-                        <div class="scan-meta">
-                            <div>${row.scanned_at}</div>
-                            <div style="font-size:0.75em; opacity:0.7; margin-top:4px; word-break:break-word;">${row.user_agent}</div>
-                        </div>
-                    </div>`;
-                });
-            }
-            document.getElementById('statsContent').innerHTML = html;
+    // Bypass any cached matrix so saved design shows up after a recent Save.
+    delete MATRIX_CACHE[uuid];
+    loadMatrix(uuid)
+        .then(matrix => {
+            if (matrix && matrix.design) applyDesignerInputs(matrix.design);
+            refreshPreview();
         })
-        .catch(() => {
-            document.getElementById('statsContent').innerHTML = '<p style="color:red">Error loading stats.</p>';
+        .catch(err => {
+            console.error(err);
+            document.getElementById('qrCanvas').innerHTML = '<div style="color:#dc3545; padding:20px; font-size:0.85em;">Failed to load QR matrix</div>';
         });
 }
+
 
 // ── Delete ───────────────────────────────────────────────────────────────────
 let deleteId = null;
