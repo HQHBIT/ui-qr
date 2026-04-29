@@ -69,6 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
     <title>Login | Umoor Iqtesadiyah QR Track</title>
+    <link rel="icon" type="image/png" href="<?= htmlspecialchars(BASE_URL) ?>/logo-v2.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Recursive:wght@300..900&display=swap" rel="stylesheet">
     <style>
@@ -81,7 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         button { width: 100%; padding: 12px; background: var(--accent); border: none; color: white; border-radius: 4px; font-weight: bold; cursor: pointer; margin-top: 10px; }
         button:hover { opacity: 0.9; }
         .error { color: #dc3545; text-align: center; margin-bottom: 15px; font-size: 0.9em; }
-        .logo { display: block; margin: 0 auto 20px auto; width: 60px; }
+        .logo { display: block; margin: 0 auto 20px auto; width: 140px; height: auto; }
     </style>
 </head>
 <body>

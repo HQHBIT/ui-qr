@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
     <title><?= defined('PAGE_TITLE') ? htmlspecialchars(PAGE_TITLE) : 'Umoor Iqtesadiyah QR Track' ?></title>
+    <link rel="icon" type="image/png" href="<?= htmlspecialchars(BASE_URL) ?>/logo-v2.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Recursive:wght@300..900&display=swap" rel="stylesheet">
     <style>
@@ -16,7 +17,7 @@
         /* Header */
         header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; border-bottom: 1px solid var(--border); padding-bottom: 20px; }
         .header-brand { display: flex; align-items: center; gap: 15px; }
-        .logo-img { height: 50px; width: auto; }
+        .logo-img { height: 60px; width: auto; }
         h1 { margin: 0; font-weight: 800; background: linear-gradient(45deg, #1e90ff, #66b2ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 
         /* UI Elements */
