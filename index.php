@@ -226,6 +226,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         $stmt = $db->prepare("UPDATE products SET title = ?, target_data = ?, design_json = ?, folder_id = ? WHERE id = ? AND is_deleted = 0");
         $stmt->execute([$title, $target, $designJson, $folderId, $id]);
+        qr_cache_purge((string)$current['uuid']);
 
         $redir = BASE_URL;
         if ($folderId !== null) $redir .= '?folder=' . $folderId;
@@ -316,10 +317,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // Action: Update Design (live designer save)
     if ($_POST['action'] === 'design') {
         $id = (int)($_POST['id'] ?? 0);
-        ensure_owner_or_admin($db, $id, $me);
+        $row = ensure_owner_or_admin($db, $id, $me);
         $design = sanitize_design($_POST['design'] ?? []);
         $db->prepare("UPDATE products SET design_json = ? WHERE id = ?")
            ->execute([json_encode($design), $id]);
+        qr_cache_purge((string)$row['uuid']);
         header('Content-Type: application/json');
         echo json_encode(['status' => 'ok', 'design' => $design]);
         exit;
@@ -412,112 +414,451 @@ function build_folder_options(array $all, ?int $selected = null, ?int $parent = 
 
 $csrfToken = csrf_token();
 
+// Type label + badge tone for the QR list
+function qr_type_label(string $type): string {
+    return [
+        'url'    => 'Website',
+        'phone'  => 'Phone',
+        'map'    => 'Map',
+        'vcard'  => 'vCard',
+        'wifi'   => 'Wi-Fi',
+        'sms'    => 'SMS',
+        'email'  => 'Email',
+        'social' => 'Social',
+    ][$type] ?? strtoupper($type);
+}
+function qr_short_target(array $p): string {
+    if ($p['type'] === 'url' || $p['type'] === 'social') return (string)$p['target_data'];
+    if ($p['type'] === 'phone') return 'tel:' . $p['target_data'];
+    if ($p['type'] === 'map')   return 'map: ' . $p['target_data'];
+    if ($p['type'] === 'wifi')  return 'Wi-Fi network';
+    if ($p['type'] === 'vcard') return 'vCard contact';
+    if ($p['type'] === 'sms')   return 'SMS message';
+    if ($p['type'] === 'email') return 'Email message';
+    return BASE_URL . '/p/' . $p['uuid'];
+}
+
 // --- RENDER VIEW ---
-define('SHOW_ADD_BTN', true);
+define('ACTIVE_NAV', 'qrcodes');
 include THEME_PATH . '/header.php';
 ?>
 
+<style>
+/* Page-specific */
+.breadcrumb { display: flex; gap: 6px; align-items: center; font-size: 0.9rem; color: var(--muted); margin-bottom: 14px; flex-wrap: wrap; }
+.breadcrumb a { color: var(--accent-strong); text-decoration: none; }
+.breadcrumb a:hover { text-decoration: underline; }
+.breadcrumb .sep { color: var(--muted-2); }
+
+.section-title { font-size: 0.92rem; color: var(--muted); font-weight: 600; margin: 6px 0 12px; }
+
+.folder-strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(190px, 1fr); gap: 14px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 22px; }
+.folder-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.folder-card:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(34,197,94,0.12); transform: translateY(-1px); }
+.folder-card .icon-wrap {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: #eef2f6;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted);
+}
+.folder-card .icon-wrap svg { width: 20px; height: 20px; }
+.folder-card .count { font-weight: 800; font-size: 1.05rem; }
+.folder-card .name { font-weight: 600; }
+.folder-card .meta { font-size: 0.78rem; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+
+.filter-bar {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: grid;
+    grid-template-columns: 1.6fr 1fr 1fr 1fr 0.8fr;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+.filter-bar .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.filter-bar .field label { font-size: 0.72rem; color: var(--muted); font-weight: 600; text-transform: none; margin: 0; }
+.filter-bar input, .filter-bar select { margin: 0; padding: 9px 12px; font-size: 0.85rem; background: #f5f7fa; border: 1px solid transparent; border-radius: 999px; }
+.filter-bar input:focus, .filter-bar select:focus { background: #fff; border-color: var(--accent); }
+@media (max-width: 1100px) { .filter-bar { grid-template-columns: 1fr 1fr; } }
+
+.list-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 4px 4px; }
+.list-head label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9rem; color: var(--muted); margin: 0; }
+.list-head input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+
+.qr-list { display: flex; flex-direction: column; gap: 10px; }
+.qr-row {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    display: grid;
+    grid-template-columns: 22px 64px 1.4fr 1.6fr 110px auto;
+    align-items: center;
+    gap: 18px;
+    transition: border-color .15s, box-shadow .15s;
+    position: relative;
+}
+.qr-row:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(34,197,94,0.08); }
+.qr-row.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.qr-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+
+.qr-thumb {
+    width: 64px; height: 64px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #fff;
+    object-fit: contain;
+    cursor: pointer;
+    padding: 4px;
+}
+.qr-row-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.qr-row-title { font-weight: 700; font-size: 0.98rem; }
+.qr-row-date { font-size: 0.78rem; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+
+.qr-row-meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 0.82rem; }
+.qr-row-meta .meta-line { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qr-row-meta .meta-line.url { color: var(--accent-strong); }
+.qr-row-meta .meta-line.url a { color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; }
+
+.qr-row-scans { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.qr-row-scans .label { font-size: 0.78rem; color: var(--info); cursor: pointer; text-decoration: none; }
+.qr-row-scans .num {
+    font-size: 1.4rem; font-weight: 800; color: var(--info);
+    width: 56px; height: 56px; border-radius: 50%;
+    background: #eef5ff;
+    display: flex; align-items: center; justify-content: center;
+}
+
+.qr-row-actions { display: flex; gap: 8px; align-items: center; position: relative; }
+.kebab {
+    width: 36px; height: 36px;
+    background: var(--accent);
+    border: 0;
+    border-radius: 8px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+}
+.kebab:hover { background: var(--accent-strong); }
+
+.row-menu {
+    position: absolute;
+    top: 100%; right: 0;
+    margin-top: 4px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.12);
+    min-width: 180px;
+    padding: 6px;
+    z-index: 50;
+    display: none;
+}
+.row-menu.open { display: block; }
+.row-menu button {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%;
+    background: transparent;
+    border: 0;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.86rem;
+    color: var(--text);
+}
+.row-menu button:hover { background: #f5f7fa; }
+.row-menu button.danger { color: var(--danger); }
+.row-menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+
+@media (max-width: 1100px) {
+    .qr-row { grid-template-columns: 22px 60px 1fr auto; }
+    .qr-row-meta, .qr-row-scans { display: none; }
+}
+
+.empty {
+    text-align: center;
+    padding: 50px 20px;
+    color: var(--muted);
+    background: #fff;
+    border: 1px dashed var(--border-strong);
+    border-radius: 12px;
+}
+
+/* Preview modal */
+.preview-img-wrap {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    text-align: center;
+}
+.preview-img-wrap img { max-width: 100%; height: auto; border-radius: 8px; }
+.preview-meta { font-size: 0.85rem; color: var(--muted); margin-top: 12px; word-break: break-all; }
+</style>
+
 <?php if ($showTrash): ?>
-<div style="margin-bottom:15px; display:flex; align-items:center; gap:15px;">
-    <a href="<?= htmlspecialchars(BASE_URL) ?>" class="btn btn-sm" style="background:#6c757d;">&larr; Back to Dashboard</a>
-    <h2 style="margin:0; color:#dc3545;">Trash</h2>
+<div class="topbar">
+    <div style="display:flex; align-items:center; gap:12px;">
+        <a href="<?= htmlspecialchars(BASE_URL) ?>" class="btn btn-ghost btn-sm">&larr; Back</a>
+        <h1 style="color: var(--danger);">Trash</h1>
+    </div>
 </div>
 <?php else: ?>
-<div class="folder-bar">
-    <div class="folder-breadcrumb">
-        <a href="<?= htmlspecialchars(BASE_URL) ?>"><?= empty($folderPath) ? '<strong>Home</strong>' : 'Home' ?></a>
-        <?php foreach ($folderPath as $i => $f): ?>
-            <span class="crumb-sep">/</span>
-            <?php if ($i === count($folderPath) - 1): ?>
-                <strong><?= htmlspecialchars($f['name']) ?></strong>
-            <?php else: ?>
-                <a href="?folder=<?= (int)$f['id'] ?>"><?= htmlspecialchars($f['name']) ?></a>
-            <?php endif; ?>
-        <?php endforeach; ?>
-    </div>
-    <div style="display:flex; gap:8px;">
-        <button class="btn btn-sm" style="background:#6c757d;" onclick="openFolderAdd(<?= $currentFolderId !== null ? (int)$currentFolderId : 'null' ?>)">+ Folder</button>
-        <?php if ($currentFolderId !== null): ?>
-            <button class="btn btn-sm btn-info" onclick="openFolderRename(<?= (int)end($folderPath)['id'] ?>, <?= htmlspecialchars(json_encode(end($folderPath)['name']), ENT_QUOTES) ?>)">Rename</button>
-            <button class="btn btn-sm btn-danger" onclick="confirmFolderDelete(<?= (int)end($folderPath)['id'] ?>)">Delete</button>
-        <?php endif; ?>
-        <a href="?trash" class="btn btn-sm" style="background:#6c757d;" title="View deleted QR codes">&#128465; Trash</a>
+
+<div class="topbar">
+    <h1>My QR Codes</h1>
+    <div class="topbar-actions">
+        <button class="btn btn-outline" onclick="openFolderAdd(<?= $currentFolderId !== null ? (int)$currentFolderId : 'null' ?>)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14h6"/></svg>
+            New Folder
+        </button>
+        <button class="btn" onclick="openModal('addModal')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            Create QR Code
+        </button>
+        <a href="?trash" class="btn btn-ghost btn-sm" title="Trash">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg>
+        </a>
     </div>
 </div>
 
+<?php if (!empty($folderPath)): ?>
+<div class="breadcrumb">
+    <a href="<?= htmlspecialchars(BASE_URL) ?>">Home</a>
+    <?php foreach ($folderPath as $i => $f): ?>
+        <span class="sep">/</span>
+        <?php if ($i === count($folderPath) - 1): ?>
+            <strong><?= htmlspecialchars($f['name']) ?></strong>
+            <button class="btn btn-ghost btn-sm" style="margin-left:8px;" onclick="openFolderRename(<?= (int)$f['id'] ?>, <?= htmlspecialchars(json_encode($f['name']), ENT_QUOTES) ?>)">Rename</button>
+            <button class="btn btn-ghost btn-sm" style="color:var(--danger); border-color:var(--danger);" onclick="confirmFolderDelete(<?= (int)$f['id'] ?>)">Delete</button>
+        <?php else: ?>
+            <a href="?folder=<?= (int)$f['id'] ?>"><?= htmlspecialchars($f['name']) ?></a>
+        <?php endif; ?>
+    <?php endforeach; ?>
+</div>
+<?php endif; ?>
+
 <?php if (!empty($subfolders)): ?>
-<div class="folder-grid">
+<div class="section-title">My Folders</div>
+<div class="folder-strip">
     <?php foreach ($subfolders as $f): ?>
         <a class="folder-card" href="?folder=<?= (int)$f['id'] ?>">
-            <div class="folder-icon">📁</div>
-            <div class="folder-name"><?= htmlspecialchars($f['name']) ?></div>
-            <div class="folder-meta"><?= (int)$f['qr_count'] ?> QR<?= (int)$f['sub_count'] ? ' · ' . (int)$f['sub_count'] . ' sub' : '' ?></div>
+            <div class="icon-wrap">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            </div>
+            <div class="count"><?= (int)$f['qr_count'] ?> Files<?= (int)$f['sub_count'] ? ' · ' . (int)$f['sub_count'] . ' sub' : '' ?></div>
+            <div class="name"><?= htmlspecialchars($f['name']) ?></div>
+            <div class="meta">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                <?= date('M d, Y', strtotime($f['created_at'])) ?>
+            </div>
         </a>
     <?php endforeach; ?>
 </div>
 <?php endif; ?>
+
+<div class="filter-bar">
+    <div class="field">
+        <label>My QR Codes</label>
+        <input type="search" id="filterSearch" placeholder="Search here">
+    </div>
+    <div class="field">
+        <label>QR Code Status</label>
+        <select id="filterStatus">
+            <option value="">All</option>
+            <option value="active">Active</option>
+            <option value="disabled">Disabled</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>QR Code Type</label>
+        <select id="filterType">
+            <option value="">All</option>
+            <?php foreach (ALLOWED_TYPES as $t): ?>
+                <option value="<?= htmlspecialchars($t) ?>"><?= htmlspecialchars(qr_type_label($t)) ?></option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <div class="field">
+        <label>Sort by</label>
+        <select id="filterSort">
+            <option value="recent">Most recent</option>
+            <option value="scans">Most scans</option>
+            <option value="title">Title (A–Z)</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>Quantity</label>
+        <select id="filterQty">
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="0" selected>All</option>
+        </select>
+    </div>
+</div>
+
+<div class="list-head">
+    <label><input type="checkbox" id="selectAll"> Select All</label>
+    <button class="btn btn-outline btn-sm" id="bulkDownload">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v12M6 10l6 6 6-6M5 20h14"/></svg>
+        Download
+    </button>
+</div>
 <?php endif; ?>
 
-<div class="qr-list">
+<div class="qr-list" id="qrList">
     <?php if (empty($products)): ?>
-        <p style="text-align:center; color:#666; padding:40px 0;">
-            <?= $showTrash ? 'Trash is empty.' : 'No QR codes yet. Click "+ New QR Code" to create one.' ?>
-        </p>
+        <div class="empty">
+            <?= $showTrash ? 'Trash is empty.' : 'No QR codes yet. Click "Create QR Code" to make one.' ?>
+        </div>
     <?php endif; ?>
 
-    <?php foreach($products as $p): ?>
-    <div class="qr-item">
-        <div class="qr-info">
-            <h3><?= htmlspecialchars($p['title']) ?> <span style="font-size:0.7em; opacity:0.6">[<?= strtoupper(htmlspecialchars($p['type'])) ?>]</span><?php if ($isAdmin && !empty($p['owner_username'])): ?> <span style="font-size:0.7em; opacity:0.7; padding:2px 6px; border-radius:8px; background:#eef3ff; color:#1e90ff;"><?= htmlspecialchars($p['owner_username']) ?></span><?php endif; ?></h3>
-            <div class="qr-meta">Created: <?= date('M d, Y', strtotime($p['created_at'])) ?></div>
+    <?php foreach($products as $p):
+        $title  = htmlspecialchars($p['title']);
+        $type   = $p['type'];
+        $folder = $p['folder_name'] !== null ? htmlspecialchars($p['folder_name']) : 'No folder';
+        $url    = qr_short_target($p);
+        $stats  = (int)$p['scan_count'];
+        $imgVer = substr(md5(($p['design_json'] ?? '') . ($p['logo_path'] ?? '') . ($p['target_data'] ?? '')), 0, 8);
+        $imgSrc = htmlspecialchars(BASE_URL) . '/generate_image.php?id=' . urlencode($p['uuid']) . '&format=png&v=' . $imgVer;
+        $isWifi = $type === 'wifi';
+        $editPayload = json_encode([
+            'id'          => $p['id'],
+            'title'       => $p['title'],
+            'type'        => $p['type'],
+            'target_data' => $p['target_data'],
+            'folder_id'   => $p['folder_id'] !== null ? (int)$p['folder_id'] : '',
+        ]);
+        $designPayload = json_encode(json_decode($p['design_json'] ?? '') ?: new stdClass());
+    ?>
+    <div class="qr-row"
+         data-id="<?= (int)$p['id'] ?>"
+         data-uuid="<?= htmlspecialchars($p['uuid']) ?>"
+         data-title="<?= $title ?>"
+         data-type="<?= htmlspecialchars($type) ?>"
+         data-active="<?= $p['is_active'] ? '1' : '0' ?>"
+         data-scans="<?= $stats ?>"
+         data-search="<?= htmlspecialchars(strtolower($p['title'] . ' ' . $url . ' ' . $type)) ?>"
+         data-created="<?= htmlspecialchars($p['created_at']) ?>">
+        <input type="checkbox" class="row-check">
+        <img class="qr-thumb" src="<?= $imgSrc ?>" alt="QR" loading="lazy"
+             onclick='openPreview(<?= htmlspecialchars(json_encode([
+                 'uuid'  => $p['uuid'],
+                 'title' => $p['title'],
+                 'type'  => qr_type_label($p['type']),
+                 'url'   => $url,
+             ]), ENT_QUOTES) ?>)'>
+        <div class="qr-row-main">
+            <span class="badge badge-type"><?= htmlspecialchars(qr_type_label($type)) ?></span>
+            <div class="qr-row-title"><?= $title ?><?php if ($isAdmin && !empty($p['owner_username'])): ?> <span style="font-size:0.7em; color:var(--muted); font-weight:500;">· <?= htmlspecialchars($p['owner_username']) ?></span><?php endif; ?></div>
+            <div class="qr-row-date">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                <?= date('M d, Y', strtotime($p['created_at'])) ?>
+            </div>
         </div>
-
-        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end;">
-
-            <?php if ($showTrash): ?>
-                <form method="POST" style="margin:0;">
-                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
-                    <input type="hidden" name="action" value="restore">
-                    <input type="hidden" name="id" value="<?= (int)$p['id'] ?>">
-                    <button type="submit" class="btn btn-sm" style="background:#28a745;">Restore</button>
-                </form>
+        <div class="qr-row-meta">
+            <div class="meta-line">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                <?= $folder ?>
+            </div>
+            <div class="meta-line url">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+                <a href="<?= htmlspecialchars(BASE_URL) ?>/p/<?= htmlspecialchars($p['uuid']) ?>" target="_blank" rel="noopener">
+                    <?= htmlspecialchars($url) ?>
+                </a>
+            </div>
+            <div class="meta-line">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>
+                Modified: <?= date('M d, Y', strtotime($p['created_at'])) ?>
+            </div>
+        </div>
+        <?php if ($showTrash): ?>
+            <form method="POST" style="margin:0; grid-column: span 2;">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                <input type="hidden" name="action" value="restore">
+                <input type="hidden" name="id" value="<?= (int)$p['id'] ?>">
+                <button type="submit" class="btn">Restore</button>
+            </form>
+        <?php else: ?>
+            <?php if ($isWifi): ?>
+                <div class="qr-row-scans"><span class="label">Scans</span><span class="num" style="background:#f1f3f5; color:var(--muted-2);">—</span></div>
             <?php else: ?>
-                <?php if ($p['type'] === 'wifi'): ?>
-                    <div class="qr-stats" style="color: #666; text-decoration: none; cursor: default;">Not Trackable</div>
-                <?php else: ?>
-                    <a href="stats.php?uuid=<?= htmlspecialchars($p['uuid']) ?>" class="qr-stats" style="text-decoration:underline;"><?= (int)$p['scan_count'] ?> Scans</a>
-                <?php endif; ?>
-
-                <label class="switch">
-                    <input type="checkbox" onchange="toggleQR(<?= (int)$p['id'] ?>, '<?= htmlspecialchars($csrfToken) ?>')" <?= $p['is_active'] ? 'checked' : '' ?>>
-                    <span class="slider"></span>
-                </label>
-
-                <button class="btn btn-sm" onclick='showQR(<?= htmlspecialchars(json_encode($p['uuid']), ENT_QUOTES) ?>, <?= htmlspecialchars(json_encode($p['title']), ENT_QUOTES) ?>, <?= (int)$p['id'] ?>, <?= htmlspecialchars(json_encode(json_decode($p['design_json'] ?? '') ?: new stdClass()), ENT_QUOTES) ?>)'>Design / Get Code</button>
-
-                <button class="btn btn-sm btn-info" onclick='openEditModal(<?= htmlspecialchars(json_encode([
-                    'id'          => $p['id'],
-                    'title'       => $p['title'],
-                    'type'        => $p['type'],
-                    'target_data' => $p['target_data'],
-                    'folder_id'   => $p['folder_id'] !== null ? (int)$p['folder_id'] : '',
-                ]), ENT_QUOTES) ?>)' title="Edit">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                        <path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/>
-                    </svg>
-                </button>
-
-                <button class="btn btn-sm btn-danger" onclick="confirmDelete(<?= (int)$p['id'] ?>)" title="Delete" style="display:flex; align-items:center; padding: 8px;">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                        <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
-                        <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-                    </svg>
-                </button>
+                <a class="qr-row-scans" href="stats.php?uuid=<?= htmlspecialchars($p['uuid']) ?>" style="text-decoration:none;">
+                    <span class="label">Scans</span>
+                    <span class="num"><?= $stats ?></span>
+                </a>
             <?php endif; ?>
-
-        </div>
+            <div class="qr-row-actions">
+                <a class="btn btn-outline btn-sm" href="stats.php?uuid=<?= htmlspecialchars($p['uuid']) ?>">Detail</a>
+                <button class="kebab" onclick="toggleRowMenu(this, event)" aria-label="More">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+                </button>
+                <div class="row-menu">
+                    <button onclick='openPreview(<?= htmlspecialchars(json_encode([
+                        'uuid'  => $p['uuid'],
+                        'title' => $p['title'],
+                        'type'  => qr_type_label($p['type']),
+                        'url'   => $url,
+                    ]), ENT_QUOTES) ?>)'>
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                        Preview
+                    </button>
+                    <button onclick='openDesigner(<?= htmlspecialchars(json_encode($p['uuid']), ENT_QUOTES) ?>, <?= htmlspecialchars(json_encode($p['title']), ENT_QUOTES) ?>, <?= (int)$p['id'] ?>, <?= htmlspecialchars($designPayload, ENT_QUOTES) ?>)'>
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+                        Edit Design
+                    </button>
+                    <button onclick='openEditModal(<?= htmlspecialchars($editPayload, ENT_QUOTES) ?>)'>
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4z"/></svg>
+                        Edit Info
+                    </button>
+                    <button onclick="toggleQRRow(<?= (int)$p['id'] ?>, this)">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="12" r="4"/><path d="M8 8h8a4 4 0 0 1 0 8H8"/></svg>
+                        <?= $p['is_active'] ? 'Disable' : 'Enable' ?>
+                    </button>
+                    <hr>
+                    <button class="danger" onclick="confirmDelete(<?= (int)$p['id'] ?>)">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg>
+                        Delete
+                    </button>
+                </div>
+            </div>
+        <?php endif; ?>
     </div>
     <?php endforeach; ?>
+</div>
+
+<!-- ── Preview Modal (image only — no design controls) ───────────────────────── -->
+<div id="previewModal" class="modal">
+    <div class="modal-content" style="max-width:480px;">
+        <svg class="close-icon" onclick="closeModal('previewModal')" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        <h2 id="previewTitle" style="margin-top:0;">QR Preview</h2>
+        <div class="preview-img-wrap">
+            <img id="previewImg" src="" alt="">
+            <div class="dl-row" style="margin-top:14px;">
+                <a id="previewDlPng" href="#" download class="btn btn-outline btn-sm">PNG</a>
+                <a id="previewDlJpg" href="#" download class="btn btn-outline btn-sm">JPG</a>
+                <a id="previewDlSvg" href="#" download class="btn btn-outline btn-sm">SVG</a>
+                <button onclick="printPreview()" class="btn btn-ghost btn-sm">Print</button>
+            </div>
+        </div>
+        <div class="preview-meta" id="previewMeta"></div>
+    </div>
 </div>
 
 <!-- ── Add Modal ──────────────────────────────────────────────────────────────── -->
@@ -687,7 +1028,7 @@ include THEME_PATH . '/header.php';
                     <a id="dlPng" href="#" download class="btn btn-sm">PNG</a>
                     <a id="dlJpg" href="#" download class="btn btn-sm">JPG</a>
                     <a id="dlSvg" href="#" download class="btn btn-sm">SVG</a>
-                    <button onclick="printQR()" class="btn btn-sm" style="background:#6c757d;">Print</button>
+                    <button onclick="printQR()" class="btn btn-ghost btn-sm">Print</button>
                 </div>
                 <div style="margin-top:14px;">
                     <div style="font-size:0.78rem; color:var(--muted); font-weight:600; text-align:left; margin-bottom:6px;">PRESETS</div>
@@ -760,7 +1101,7 @@ include THEME_PATH . '/header.php';
 
                 <div class="full" style="display:flex; align-items:center; gap:12px; margin-top:6px;">
                     <button id="dSave" class="btn btn-sm">Save Design</button>
-                    <button id="dReset" class="btn btn-sm" style="background:#6c757d;">Reset</button>
+                    <button id="dReset" class="btn btn-ghost btn-sm">Reset</button>
                     <span id="dSaveMsg" style="color:var(--muted); font-size:0.85em;"></span>
                 </div>
             </div>
@@ -799,7 +1140,7 @@ include THEME_PATH . '/header.php';
         <p>QR codes and subfolders inside will be moved up to the parent.</p>
         <div style="display:flex; gap:10px; justify-content:center; margin-top:20px;">
             <button class="btn btn-danger" onclick="submitFolderDelete()">Yes, delete</button>
-            <button class="btn" style="background:#6c757d;" onclick="closeModal('folderDeleteModal')">Cancel</button>
+            <button class="btn btn-ghost" onclick="closeModal('folderDeleteModal')">Cancel</button>
         </div>
     </div>
 </div>
@@ -812,7 +1153,7 @@ include THEME_PATH . '/header.php';
         <p>This will move the QR code to Trash. You can restore it later.</p>
         <div style="margin-top: 20px; display:flex; gap:10px; justify-content:center;">
             <button id="confirmDeleteBtn" class="btn btn-danger">Yes, Delete</button>
-            <button onclick="closeModal('deleteModal')" class="btn" style="background: #6c757d;">Cancel</button>
+            <button onclick="closeModal('deleteModal')" class="btn btn-ghost">Cancel</button>
         </div>
     </div>
 </div>
@@ -827,13 +1168,16 @@ window.addEventListener('click', function(e) {
     if (e.target.classList.contains('modal')) e.target.style.display = 'none';
 });
 
-// ── Print ────────────────────────────────────────────────────────────────────
+// ── Print designer canvas (inline SVG) ───────────────────────────────────────
 function printQR() {
+    const canvas = document.getElementById('qrCanvas');
+    const svg = canvas ? canvas.querySelector('svg') : null;
+    if (!svg) return;
     const win = window.open('');
     win.document.write('<html><body style="text-align:center;"><h2 style="font-family:sans-serif">' +
-        document.getElementById('qrTitle').innerText +
-        '</h2><img src="' + document.getElementById('qrImage').src +
-        '" onload="window.print();window.close()" /></body></html>');
+        document.getElementById('qrTitle').innerText + '</h2>' + svg.outerHTML +
+        '<script>window.onload=function(){window.print();window.close();}<\/script>' +
+        '</body></html>');
     win.document.close();
 }
 
@@ -1258,14 +1602,12 @@ document.getElementById('dReset').addEventListener('click', function() {
     refreshPreview();
 });
 
-function showQR(uuid, title, id, design) {
+function openDesigner(uuid, title, id, design) {
     DESIGNER_STATE = { uuid, id, title };
     document.getElementById('qrTitle').innerText = title + ' — Designer';
     buildPresetChips();
-    // Fall back to inline design (might be stale); the matrix fetch will overwrite with the authoritative saved design.
     applyDesignerInputs(design);
     openModal('qrModal');
-    // Bypass any cached matrix so saved design shows up after a recent Save.
     delete MATRIX_CACHE[uuid];
     loadMatrix(uuid)
         .then(matrix => {
@@ -1276,6 +1618,135 @@ function showQR(uuid, title, id, design) {
             console.error(err);
             document.getElementById('qrCanvas').innerHTML = '<div style="color:#dc3545; padding:20px; font-size:0.85em;">Failed to load QR matrix</div>';
         });
+}
+const showQR = openDesigner; // backwards-compat
+
+// ── Preview modal (image-only, hits cached PNG) ──────────────────────────────
+let PREVIEW_STATE = { uuid: null, title: '' };
+function openPreview(p) {
+    PREVIEW_STATE = { uuid: p.uuid, title: p.title };
+    const base = 'generate_image.php?id=' + encodeURIComponent(p.uuid);
+    const img = document.getElementById('previewImg');
+    img.src = base + '&format=png&v=' + Date.now();
+    img.alt = p.title;
+    document.getElementById('previewTitle').innerText = p.title;
+    document.getElementById('previewMeta').innerHTML =
+        '<strong>' + (p.type || '') + '</strong>' + (p.url ? ' &middot; ' + p.url.replace(/</g,'&lt;') : '');
+    const dlPng = document.getElementById('previewDlPng');
+    const dlJpg = document.getElementById('previewDlJpg');
+    const dlSvg = document.getElementById('previewDlSvg');
+    dlPng.href = base + '&format=png'; dlPng.download = (p.title || 'QR') + '-QR.png';
+    dlJpg.href = base + '&format=jpg'; dlJpg.download = (p.title || 'QR') + '-QR.jpg';
+    dlSvg.href = base + '&format=svg'; dlSvg.download = (p.title || 'QR') + '-QR.svg';
+    openModal('previewModal');
+}
+function printPreview() {
+    const win = window.open('');
+    win.document.write('<html><body style="text-align:center;"><h2 style="font-family:sans-serif">' +
+        document.getElementById('previewTitle').innerText +
+        '</h2><img src="' + document.getElementById('previewImg').src +
+        '" onload="window.print();window.close()" /></body></html>');
+    win.document.close();
+}
+
+// ── Row kebab menu ───────────────────────────────────────────────────────────
+function toggleRowMenu(btn, ev) {
+    ev.stopPropagation();
+    const menu = btn.parentElement.querySelector('.row-menu');
+    document.querySelectorAll('.row-menu.open').forEach(m => { if (m !== menu) m.classList.remove('open'); });
+    menu.classList.toggle('open');
+}
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.row-menu') && !e.target.closest('.kebab')) {
+        document.querySelectorAll('.row-menu.open').forEach(m => m.classList.remove('open'));
+    }
+});
+
+// Toggle active from row menu (also flip menu label)
+function toggleQRRow(id, btnEl) {
+    const row = btnEl.closest('.qr-row');
+    const fd = new FormData();
+    fd.append('action', 'toggle');
+    fd.append('id', id);
+    fd.append('csrf_token', CSRF_TOKEN);
+    fetch('index.php', { method: 'POST', body: fd }).then(() => {
+        const wasActive = row.dataset.active === '1';
+        row.dataset.active = wasActive ? '0' : '1';
+        btnEl.lastChild.textContent = ' ' + (wasActive ? 'Enable' : 'Disable');
+        applyFilters();
+    });
+}
+
+// ── Filters ──────────────────────────────────────────────────────────────────
+function applyFilters() {
+    const q = (document.getElementById('filterSearch')?.value || '').trim().toLowerCase();
+    const status = document.getElementById('filterStatus')?.value || '';
+    const type = document.getElementById('filterType')?.value || '';
+    const sort = document.getElementById('filterSort')?.value || 'recent';
+    const qty = parseInt(document.getElementById('filterQty')?.value || '0', 10);
+
+    const list = document.getElementById('qrList');
+    const rows = Array.from(list.querySelectorAll('.qr-row'));
+    rows.forEach(r => {
+        let show = true;
+        if (q && !(r.dataset.search || '').includes(q)) show = false;
+        if (type && r.dataset.type !== type) show = false;
+        if (status === 'active'   && r.dataset.active !== '1') show = false;
+        if (status === 'disabled' && r.dataset.active !== '0') show = false;
+        r.dataset.matched = show ? '1' : '0';
+    });
+
+    const visible = rows.filter(r => r.dataset.matched === '1');
+    visible.sort((a,b) => {
+        if (sort === 'scans') return (+b.dataset.scans) - (+a.dataset.scans);
+        if (sort === 'title') return a.dataset.title.localeCompare(b.dataset.title);
+        return new Date(b.dataset.created) - new Date(a.dataset.created);
+    });
+
+    rows.forEach(r => r.style.display = 'none');
+    const limit = qty > 0 ? Math.min(qty, visible.length) : visible.length;
+    visible.slice(0, limit).forEach((r, i) => {
+        r.style.display = '';
+        r.style.order = i;
+    });
+    list.style.display = 'flex';
+    list.style.flexDirection = 'column';
+}
+['filterSearch','filterStatus','filterType','filterSort','filterQty'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', applyFilters);
+});
+
+// ── Select-All + bulk download (one tab per selected) ────────────────────────
+const selAll = document.getElementById('selectAll');
+if (selAll) {
+    selAll.addEventListener('change', () => {
+        document.querySelectorAll('.row-check').forEach(c => {
+            const row = c.closest('.qr-row');
+            if (row.style.display === 'none') return;
+            c.checked = selAll.checked;
+            row.classList.toggle('selected', selAll.checked);
+        });
+    });
+}
+document.querySelectorAll('.row-check').forEach(c => {
+    c.addEventListener('change', e => {
+        c.closest('.qr-row').classList.toggle('selected', c.checked);
+    });
+});
+const bulkDl = document.getElementById('bulkDownload');
+if (bulkDl) {
+    bulkDl.addEventListener('click', () => {
+        const checked = document.querySelectorAll('.row-check:checked');
+        if (checked.length === 0) { alert('Select QR codes to download.'); return; }
+        checked.forEach(c => {
+            const row = c.closest('.qr-row');
+            const a = document.createElement('a');
+            a.href = 'generate_image.php?id=' + encodeURIComponent(row.dataset.uuid) + '&format=png';
+            a.download = (row.dataset.title || 'QR') + '-QR.png';
+            document.body.appendChild(a); a.click(); a.remove();
+        });
+    });
 }
 
 

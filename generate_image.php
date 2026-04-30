@@ -39,6 +39,48 @@ if (!$authorized) {
     die('Forbidden: Invalid or expired access token. Login to dashboard or generate a new API token.');
 }
 
+// --- CACHE LOOKUP (skip for json matrix and live-design previews) ---
+$designOverrideKeys = ['fg','bg','fg2','eye_color','gradient','gradient_dir','module_shape','eye_shape','eye_inner'];
+$hasOverrides = false;
+foreach ($designOverrideKeys as $k) { if (isset($_GET[$k])) { $hasOverrides = true; break; } }
+$cacheable = ($format !== 'json') && !$hasOverrides;
+$cacheFile = null;
+if ($cacheable) {
+    $logoFullForKey = ($item['logo_path'] && file_exists(LOGO_DIR . '/' . $item['logo_path']))
+        ? LOGO_DIR . '/' . $item['logo_path']
+        : null;
+    $logoMtime = $logoFullForKey ? (int)filemtime($logoFullForKey) : 0;
+    $cacheKey = hash('sha256', implode('|', [
+        $uuid,
+        (string)$item['type'],
+        (string)$item['target_data'],
+        (string)($item['design_json'] ?? ''),
+        (string)($item['logo_path'] ?? ''),
+        (string)$logoMtime,
+        $format,
+    ]));
+    $cacheFile = qr_cache_dir() . '/' . $uuid . '-' . substr($cacheKey, 0, 16) . '.' . $format;
+    if (is_file($cacheFile)) {
+        $ctype = $format === 'svg' ? 'image/svg+xml'
+               : ($format === 'jpg' ? 'image/jpeg' : 'image/png');
+        header('Content-Type: ' . $ctype);
+        header('Cache-Control: private, max-age=86400');
+        header('ETag: "' . substr($cacheKey, 0, 16) . '"');
+        readfile($cacheFile);
+        exit;
+    }
+}
+
+function qr_cache_write(?string $path, string $bytes): void {
+    if ($path === null) return;
+    $tmp = $path . '.tmp.' . bin2hex(random_bytes(4));
+    if (@file_put_contents($tmp, $bytes) !== false) {
+        @rename($tmp, $path);
+    } else {
+        @unlink($tmp);
+    }
+}
+
 // --- CONTENT ---
 if ($item['type'] === 'wifi') {
     $j = json_decode($item['target_data'], true);
@@ -128,7 +170,9 @@ $pxSize    = ($size + 2 * $quietCells) * $scale;
 $svg       = render_designer_svg($matrix, $design, $logoFile, $scale, $quietCells);
 
 if ($format === 'svg') {
+    qr_cache_write($cacheFile, $svg);
     header('Content-Type: image/svg+xml');
+    header('Cache-Control: private, max-age=86400');
     echo $svg;
     exit;
 }
@@ -162,12 +206,16 @@ if ($rasterized === null) {
             imagedestroy($src); imagedestroy($logo);
         }
     }
+    qr_cache_write($cacheFile, $img);
     header('Content-Type: image/' . $format);
+    header('Cache-Control: private, max-age=86400');
     echo $img;
     exit;
 }
 
+qr_cache_write($cacheFile, $rasterized);
 header('Content-Type: image/' . ($format === 'jpg' ? 'jpeg' : 'png'));
+header('Cache-Control: private, max-age=86400');
 echo $rasterized;
 exit;
 

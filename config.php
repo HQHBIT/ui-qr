@@ -11,14 +11,15 @@ define('ADMIN_PASS', '18ddbf4f606ab5a2');
 define('API_KEY', 'bdbf960e71744f6d7de3477debf7be4541330f54597c9cc84b567ac72c37a067');
 
 // --- SITE SETTINGS ---
-// No trailing slash. Examples:
-//   Root install:      'https://yourdomain.com'
-//   Subdir install:    'https://yourdomain.com/qr-track'
-define('BASE_URL',   'http://54.198.213.208:8091');
+// Prod paths live under /home/admin/qr-track-data; if that dir is absent
+// (i.e. running locally), fall back to ~/qr-track-data and a localhost URL.
+$qrIsProd = is_dir('/home/admin/qr-track-data');
+$qrDataRoot = $qrIsProd ? '/home/admin/qr-track-data' : (getenv('HOME') . '/qr-track-data');
 
-// Absolute paths — place OUTSIDE your web root for security
-define('DB_PATH',    '/home/admin/qr-track-data/db/tuxxin_qr.sqlite');
-define('LOGO_DIR',   '/home/admin/qr-track-data/tmp');
+define('BASE_URL',   $qrIsProd ? 'http://54.198.213.208:8091' : 'http://localhost:8091');
+define('DB_PATH',    $qrDataRoot . '/db/tuxxin_qr.sqlite');
+define('LOGO_DIR',   $qrDataRoot . '/tmp');
+define('QR_CACHE_DIR', $qrDataRoot . '/qr-cache');
 
 define('TIMEZONE',   'America/New_York');
 define('THEME_PATH', __DIR__ . '/themes');
@@ -134,6 +135,24 @@ function verify_csrf(): void {
 
 function purge_old_tokens($db) {
     $db->exec("DELETE FROM api_tokens WHERE expires_at < datetime('now')");
+}
+
+// --- QR IMAGE CACHE -------------------------------------------------------
+// Cached files live at QR_CACHE_DIR/<uuid>-<hash>.<ext>. Hash captures every
+// input that affects the rendered image (content + design + logo mtime), so
+// any change produces a new hash and a new file. Purging by glob removes
+// every cached variant for a given QR.
+function qr_cache_dir(): string {
+    if (!is_dir(QR_CACHE_DIR)) {
+        @mkdir(QR_CACHE_DIR, 0755, true);
+    }
+    return QR_CACHE_DIR;
+}
+function qr_cache_purge(string $uuid): void {
+    if ($uuid === '' || !is_dir(QR_CACHE_DIR)) return;
+    foreach (glob(QR_CACHE_DIR . '/' . $uuid . '-*') ?: [] as $f) {
+        @unlink($f);
+    }
 }
 
 // --- DATABASE CONNECTION ---

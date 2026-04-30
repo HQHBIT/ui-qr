@@ -1,3 +1,4 @@
-</div><!-- /.container -->
+    </main>
+</div><!-- /.app -->
 </body>
 </html>
