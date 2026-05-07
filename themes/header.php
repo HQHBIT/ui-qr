@@ -4,8 +4,24 @@ $hdrScript = basename($_SERVER['SCRIPT_NAME'] ?? '');
 $activeNav = defined('ACTIVE_NAV') ? ACTIVE_NAV : (
     $hdrScript === 'users.php' ? 'users' :
     ($hdrScript === 'stats.php' ? 'stats' :
-    ($hdrScript === 'api_instructions.php' ? 'api' : 'qrcodes'))
+    ($hdrScript === 'account.php' ? 'account' :
+    ($hdrScript === 'api_instructions.php' ? 'api' : 'qrcodes')))
 );
+
+// Per-user logo (sidebar brand swap). LOGO_DIR is outside webroot, so we
+// embed the file as a data URI — only ~few KB and we already do this for
+// QR-embedded logos.
+$hdrBrandLogo = htmlspecialchars(BASE_URL) . '/logo-v2.png';
+if ($hdrUser && !empty($hdrUser['logo_path'])) {
+    $hdrLogoFile = LOGO_DIR . '/' . $hdrUser['logo_path'];
+    if (is_file($hdrLogoFile) && is_readable($hdrLogoFile)) {
+        $hdrBytes = @file_get_contents($hdrLogoFile);
+        if ($hdrBytes !== false) {
+            $hdrInfo = @getimagesizefromstring($hdrBytes);
+            $hdrBrandLogo = 'data:' . ($hdrInfo['mime'] ?? 'image/png') . ';base64,' . base64_encode($hdrBytes);
+        }
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -231,7 +247,7 @@ $activeNav = defined('ACTIVE_NAV') ? ACTIVE_NAV : (
 <div class="app">
     <aside class="sidebar">
         <a class="brand" href="<?= htmlspecialchars(BASE_URL) ?>">
-            <img src="<?= htmlspecialchars(BASE_URL) ?>/logo-v2.png" alt="" class="brand-logo">
+            <img src="<?= $hdrBrandLogo ?>" alt="" class="brand-logo">
             <div>
                 <div class="brand-text">Umoor Iqtesadiyah</div>
                 <div class="brand-sub">QR Track</div>
@@ -242,6 +258,10 @@ $activeNav = defined('ACTIVE_NAV') ? ACTIVE_NAV : (
             <a href="<?= htmlspecialchars(BASE_URL) ?>" class="<?= $activeNav === 'qrcodes' ? 'active' : '' ?>">
                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="16" y="16" width="3" height="3"/></svg>
                 My QR Codes
+            </a>
+            <a href="<?= htmlspecialchars(BASE_URL) ?>/account.php" class="<?= $activeNav === 'account' ? 'active' : '' ?>">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.5"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
+                My Account
             </a>
             <?php if ($hdrUser && $hdrUser['role'] === 'admin'): ?>
             <a href="<?= htmlspecialchars(BASE_URL) ?>/users.php" class="<?= $activeNav === 'users' ? 'active' : '' ?>">

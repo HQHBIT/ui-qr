@@ -72,7 +72,7 @@ function require_auth() {
         global $db;
         $uid = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : 0;
         if ($uid > 0) {
-            $stmt = $db->prepare("SELECT username, role FROM users WHERE id = ? LIMIT 1");
+            $stmt = $db->prepare("SELECT username, role, logo_path FROM users WHERE id = ? LIMIT 1");
             $stmt->execute([$uid]);
             $row = $stmt->fetch();
             if (!$row) {
@@ -82,13 +82,14 @@ function require_auth() {
                 header("Location: " . BASE_URL . "/login.php");
                 exit;
             }
-            // Refresh role (and username) from DB so demotion/promotion takes effect immediately
+            // Refresh role/username/logo from DB so changes take effect immediately
             if ($row['role'] !== ($_SESSION['role'] ?? '')) {
                 $_SESSION['role'] = $row['role'];
             }
             if ($row['username'] !== ($_SESSION['username'] ?? '')) {
                 $_SESSION['username'] = $row['username'];
             }
+            $_SESSION['logo_path'] = $row['logo_path'] ?? null;
         }
     }
 }
@@ -97,9 +98,10 @@ function current_user(): ?array {
     if (session_status() === PHP_SESSION_NONE) session_start();
     if (empty($_SESSION['logged_in']) || empty($_SESSION['user_id'])) return null;
     return [
-        'id'       => (int)$_SESSION['user_id'],
-        'username' => $_SESSION['username'] ?? '',
-        'role'     => $_SESSION['role'] ?? 'user',
+        'id'        => (int)$_SESSION['user_id'],
+        'username'  => $_SESSION['username'] ?? '',
+        'role'      => $_SESSION['role'] ?? 'user',
+        'logo_path' => $_SESSION['logo_path'] ?? null,
     ];
 }
 
@@ -173,8 +175,13 @@ try {
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'user',
+        logo_path TEXT DEFAULT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )");
+    $ucols = $db->query("PRAGMA table_info(users)")->fetchAll(PDO::FETCH_COLUMN, 1);
+    if (!in_array('logo_path', $ucols, true)) {
+        $db->exec("ALTER TABLE users ADD COLUMN logo_path TEXT DEFAULT NULL");
+    }
 
     $db->exec("CREATE TABLE IF NOT EXISTS folders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
